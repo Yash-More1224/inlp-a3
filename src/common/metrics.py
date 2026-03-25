@@ -23,23 +23,8 @@ def word_accuracy(pred: str, target: str) -> float:
 
 
 def levenshtein_distance(a: str, b: str) -> int:
-    if a == b:
-        return 0
-    if len(a) == 0:
-        return len(b)
-    if len(b) == 0:
-        return len(a)
-
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, start=1):
-        current = [i]
-        for j, cb in enumerate(b, start=1):
-            ins = current[j - 1] + 1
-            delete = prev[j] + 1
-            sub = prev[j - 1] + (0 if ca == cb else 1)
-            current.append(min(ins, delete, sub))
-        prev = current
-    return prev[-1]
+    import Levenshtein
+    return Levenshtein.distance(a, b)
 
 
 def perplexity_from_loss(loss: float) -> float:
