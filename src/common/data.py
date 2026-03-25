@@ -50,11 +50,12 @@ def read_plain_text(data_dir: str = "data") -> str:
 
 
 def read_cipher_tokens(filename: str = "cipher_00.txt", data_dir: str = "data") -> list[str]:
+    from tqdm import tqdm
     text = (Path(data_dir) / filename).read_text(encoding="utf-8").strip()
     text = text.replace('\n', '').replace(' ', '')
     if not text:
         return []
-    return [text[i:i+2] for i in range(0, len(text), 2)]
+    return [text[i:i+2] for i in tqdm(range(0, len(text), 2), desc="Chunking Cipher Tokens")]
 
 
 def chunk_pairs(x: list[int], y: list[int], seq_len: int, step: int | None = None) -> tuple[list[list[int]], list[list[int]]]:
