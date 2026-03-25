@@ -1,14 +1,14 @@
 model:
-  embedding_dim: 128
-  hidden_size: 256
+  embedding_dim: 256
+  hidden_size: 512
   dropout: 0.2
 
 training:
   seed: 42
   device: cuda
-  epochs: 64
+  epochs: 50
   batch_size: 64
-  learning_rate: 0.0001
+  learning_rate: 0.0005
 
 data:
   data_dir: data
