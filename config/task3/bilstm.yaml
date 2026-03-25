@@ -1,0 +1,42 @@
+seed: 42
+device: cpu
+confidence_threshold: 0.60
+
+input_file: null
+output_text_file: null
+
+data:
+  data_dir: data
+  seq_len: 128
+  noisy_files:
+    - cipher_01.txt
+    - cipher_02.txt
+    - cipher_03.txt
+    - cipher_04.txt
+
+output:
+  base_dir: outputs
+  result_file: task3_bilstm.txt
+
+decryption_model:
+  cell_type: lstm
+  embedding_dim: 128
+  hidden_size: 256
+  dropout: 0.2
+  checkpoint_path: outputs/logs/checkpoints/task1_lstm.pt
+  hf_filename: task1_lstm.pt
+  hf:
+    repo_id: ""
+    token: null
+
+language_model:
+  type: bilstm
+  embedding_dim: 128
+  hidden_size: 192
+  dropout: 0.2
+  seq_len: 32
+  checkpoint_path: outputs/logs/checkpoints/task2_bilstm.pt
+  hf_filename: task2_bilstm.pt
+  hf:
+    repo_id: ""
+    token: null

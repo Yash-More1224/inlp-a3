@@ -1,0 +1,32 @@
+model:
+  embedding_dim: 128
+  hidden_size: 192
+  dropout: 0.2
+
+training:
+  seed: 42
+  device: cpu
+  epochs: 8
+  batch_size: 64
+  learning_rate: 0.001
+
+data:
+  data_dir: data
+  seq_len: 32
+  step: 32
+  mask_prob: 0.15
+  train_ratio: 0.8
+  val_ratio: 0.1
+
+output:
+  base_dir: outputs
+  checkpoint_path: outputs/logs/checkpoints/task2_{model}.pt
+
+logging:
+  use_wandb: false
+  project: inlp-assignment3
+
+hf:
+  push: false
+  repo_id: ""
+  token: null
