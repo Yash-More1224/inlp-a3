@@ -51,9 +51,10 @@ def read_plain_text(data_dir: str = "data") -> str:
 
 def read_cipher_tokens(filename: str = "cipher_00.txt", data_dir: str = "data") -> list[str]:
     text = (Path(data_dir) / filename).read_text(encoding="utf-8").strip()
+    text = text.replace('\n', '').replace(' ', '')
     if not text:
         return []
-    return text.split()
+    return [text[i:i+2] for i in range(0, len(text), 2)]
 
 
 def chunk_pairs(x: list[int], y: list[int], seq_len: int, step: int | None = None) -> tuple[list[list[int]], list[list[int]]]:
