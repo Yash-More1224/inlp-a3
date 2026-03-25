@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.common.config import load_config
 from src.common.data import PairDataset, build_vocab, chunk_pairs, read_cipher_tokens, read_plain_text, split_indices
@@ -53,7 +54,7 @@ def _run_epoch(model, loader, criterion, optimizer, device):
     model.train(is_train)
     total_loss = 0.0
 
-    for x, y in loader:
+    for x, y in tqdm(loader, desc="Training" if is_train else "Evaluating", leave=False):
         x = x.to(device)
         y = y.to(device)
 
@@ -77,7 +78,7 @@ def _decode_text(model, cipher_tokens: list[str], cipher_vocab, char_vocab, seq_
     ids = cipher_vocab.encode(cipher_tokens)
     out_chars: list[str] = []
 
-    for start in range(0, len(ids), seq_len):
+    for start in tqdm(range(0, len(ids), seq_len), desc="Decoding Text"):
         chunk = ids[start : start + seq_len]
         if not chunk:
             continue
