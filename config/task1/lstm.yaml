@@ -22,7 +22,7 @@ output:
   checkpoint_path: outputs/logs/checkpoints/task1_{model}.pt
 
 logging:
-  use_wandb: false
+  use_wandb: true
   project: inlp-assignment3
 
 hf:
