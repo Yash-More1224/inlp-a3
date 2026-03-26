@@ -137,9 +137,16 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         best_epoch = -1
         epochs = int(config["training"]["epochs"])
 
+        print(f"\n{'='*60}")
+        print(f"Starting Training on {cell_type.upper()} - Device: {device}")
+        print(f"Total Epochs: {epochs} | Batch Size: {batch_size}")
+        print(f"{'='*60}\n")
+
         for epoch in range(1, epochs + 1):
             train_loss = _run_epoch(model, train_loader, criterion, optimizer, device)
             val_loss = _run_epoch(model, val_loader, criterion, optimizer=None, device=device)
+
+            print(f"Epoch {epoch:3d}/{epochs} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}", end="")
 
             if use_wandb:
                 log_wandb({"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch}, step=epoch)
@@ -148,6 +155,15 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
                 best_val = val_loss
                 best_epoch = epoch
                 save_checkpoint(model, optimizer, epoch, val_loss, ckpt_path)
+                print(" ✓ (checkpoint saved)")
+            else:
+                print()
+
+        print(f"\n{'='*60}")
+        print(f"Training Complete!")
+        print(f"Best Epoch: {best_epoch} | Best Val Loss: {best_val:.6f}")
+        print(f"Model saved at: {ckpt_path}")
+        print(f"{'='*60}\n")
 
         summary_path = Path(output_dirs["logs"]) / f"task1_{cell_type}_train_summary.txt"
         write_text(str(summary_path), f"best_epoch={best_epoch}\nbest_val_loss={best_val:.6f}\n")
@@ -161,12 +177,23 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
             )
 
     if mode in {"evaluate", "both"}:
+        print(f"\n{'='*60}")
+        print(f"Starting Evaluation on {cell_type.upper()}")
+        print(f"{'='*60}\n")
+
+        print("Loading checkpoint...")
         load_checkpoint(ckpt_path, model, optimizer=None, device=device)
+        
+        print("Computing test loss...")
         test_loss = _run_epoch(model, test_loader, criterion, optimizer=None, device=device)
 
+        print("Reading cipher tokens...")
         cipher_tokens = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"])
+        
+        print("Decoding text...")
         pred_text = _decode_text(model, cipher_tokens, cipher_vocab, char_vocab, int(config["data"]["seq_len"]), device)
 
+        print("Computing metrics...")
         # Convert null characters back to spaces for metrics comparison
         target_text = plain_text[: len(pred_text)].replace('\x00', ' ')
         metrics = {
@@ -191,3 +218,13 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
             pred_text,
         ]
         write_text(str(result_path), "\n".join(report))
+
+        print(f"\n{'='*60}")
+        print(f"Evaluation Complete!")
+        print(f"{'='*60}")
+        print(f"Test Loss: {metrics['test_loss']:.6f}")
+        print(f"Character Accuracy: {metrics['char_accuracy']:.4%}")
+        print(f"Word Accuracy: {metrics['word_accuracy']:.4%}")
+        print(f"Levenshtein Distance: {metrics['levenshtein']:.0f}")
+        print(f"{'='*60}")
+        print(f"Results saved to: {result_path}\n")
