@@ -14,7 +14,7 @@ from src.common.metrics import character_accuracy, levenshtein_distance, word_ac
 from src.common.models import DecryptionModel
 from src.common.seed import set_seed
 from src.utils.checkpoints import load_checkpoint, save_checkpoint
-from src.utils.hf_wandb import finish_wandb, init_wandb, log_wandb, push_to_hub
+from src.utils.hf_wandb import finish_wandb, init_wandb, log_wandb, push_to_hub, save_checkpoint_to_wandb
 
 
 def _prepare_data(config: dict):
@@ -155,6 +155,8 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
                 best_val = val_loss
                 best_epoch = epoch
                 save_checkpoint(model, optimizer, epoch, val_loss, ckpt_path)
+                if use_wandb:
+                    save_checkpoint_to_wandb(ckpt_path, epoch, val_loss)
                 print(" ✓ (checkpoint saved)")
             else:
                 print()

@@ -13,6 +13,17 @@ def log_wandb(metrics: dict, step: int | None = None) -> None:
     wandb.log(metrics, step=step)
 
 
+def save_checkpoint_to_wandb(checkpoint_path: str, epoch: int, val_loss: float) -> None:
+    """Save checkpoint artifact to wandb."""
+    artifact = wandb.Artifact(
+        name=f"checkpoint-epoch-{epoch}",
+        type="model",
+        metadata={"epoch": epoch, "val_loss": float(val_loss)},
+    )
+    artifact.add_file(checkpoint_path, name=os.path.basename(checkpoint_path))
+    wandb.log_artifact(artifact)
+
+
 def finish_wandb() -> None:
     wandb.finish()
 
