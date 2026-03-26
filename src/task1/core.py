@@ -87,7 +87,10 @@ def _decode_text(model, cipher_tokens: list[str], cipher_vocab, char_vocab, seq_
         pred = logits.argmax(dim=-1).squeeze(0).tolist()
         out_chars.extend(char_vocab.decode(pred, skip_special=False))
 
-    return "".join(out_chars)
+    # Convert null characters (space placeholder) back to spaces
+    result = "".join(out_chars)
+    result = result.replace('\x00', ' ')
+    return result
 
 
 def run_task1(config_path: str, mode: str, cell_type: str) -> None:
@@ -164,7 +167,8 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         cipher_tokens = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"])
         pred_text = _decode_text(model, cipher_tokens, cipher_vocab, char_vocab, int(config["data"]["seq_len"]), device)
 
-        target_text = plain_text[: len(pred_text)]
+        # Convert null characters back to spaces for metrics comparison
+        target_text = plain_text[: len(pred_text)].replace('\x00', ' ')
         metrics = {
             "test_loss": test_loss,
             "char_accuracy": character_accuracy(pred_text, target_text),

@@ -30,6 +30,8 @@ def _build_word_chunks(word_ids: list[int], seq_len: int, step: int | None = Non
 
 def _prepare_task2_data(config: dict):
     plain = read_plain_text(config["data"]["data_dir"])
+    # Convert null characters (space placeholder) back to actual spaces for word splitting
+    plain = plain.replace('\x00', ' ')
     words = plain.split()
     vocab = build_vocab(words, add_mask=True)
     word_ids = vocab.encode(words)

@@ -44,7 +44,10 @@ def _decrypt_text(model, cipher_tokens: list[str], cipher_vocab, char_vocab, seq
         out_chars.extend(char_vocab.decode(pred, skip_special=False))
         confs.extend([float(v) for v in mx])
 
-    return "".join(out_chars), confs
+    # Convert null characters (space placeholder) back to spaces
+    result = "".join(out_chars)
+    result = result.replace('\x00', ' ')
+    return result, confs
 
 
 def _find_low_conf_word_positions(text: str, char_conf: list[float], threshold: float) -> list[int]:

@@ -46,16 +46,63 @@ def build_vocab(items: list[str], add_mask: bool = False) -> Vocab:
 
 
 def read_plain_text(data_dir: str = "data") -> str:
-    return (Path(data_dir) / "plain.txt").read_text(encoding="utf-8")
+    """
+    Read plain text and include spaces as a special space token.
+    Spaces are preserved to align with cipher encoding where spaces = '9'.
+    """
+    lines = (Path(data_dir) / "plain.txt").read_text(encoding="utf-8").strip().split('\n')
+    # Replace spaces with a special space character that will be treated as a token
+    # This preserves the alignment: regular chars = 2 digits, space = 1 digit ('9')
+    result = []
+    for line in lines:
+        # Replace spaces with a marker that won't conflict with regular chars
+        line_with_space_char = line.replace(' ', '\x00')
+        result.append(line_with_space_char)
+    return ''.join(result)
 
 
 def read_cipher_tokens(filename: str = "cipher_00.txt", data_dir: str = "data") -> list[str]:
+    """
+    Read cipher text and tokenize it properly.
+    Encoding: regular characters = 2 digits, spaces = 1 digit ('9').
+    We process line-by-line to properly handle variable-length tokens.
+    """
     from tqdm import tqdm
-    text = (Path(data_dir) / filename).read_text(encoding="utf-8").strip()
-    text = text.replace('\n', '').replace(' ', '')
-    if not text:
-        return []
-    return [text[i:i+2] for i in tqdm(range(0, len(text), 2), desc="Chunking Cipher Tokens")]
+    
+    plain_lines = (Path("data") / "plain.txt").read_text(encoding="utf-8").strip().split('\n')
+    cipher_lines = (Path(data_dir) / filename).read_text(encoding="utf-8").strip().split('\n')
+    
+    tokens = []
+    
+    for plain_line, cipher_line in tqdm(zip(plain_lines, cipher_lines), desc="Processing Cipher", total=len(plain_lines)):
+        # Count non-space characters and spaces in plain line
+        non_space_chars = len(plain_line.replace(' ', ''))
+        spaces = plain_line.count(' ')
+        
+        # Expected cipher length: non_space * 2 + spaces * 1
+        expected_length = non_space_chars * 2 + spaces * 1
+        cipher_line = cipher_line.strip()
+        
+        if len(cipher_line) != expected_length:
+            # Fallback: try to split as 2-digit tokens
+            tokens.extend([cipher_line[i:i+2] for i in range(0, len(cipher_line), 2)])
+        else:
+            # Decode with knowledge of space positions
+            cipher_idx = 0
+            plain_idx = 0
+            
+            while plain_idx < len(plain_line) and cipher_idx < len(cipher_line):
+                if plain_line[plain_idx] == ' ':
+                    # Space is encoded as 1 digit ('9')
+                    tokens.append(cipher_line[cipher_idx:cipher_idx+1])
+                    cipher_idx += 1
+                else:
+                    # Regular character is encoded as 2 digits
+                    tokens.append(cipher_line[cipher_idx:cipher_idx+2])
+                    cipher_idx += 2
+                plain_idx += 1
+    
+    return tokens
 
 
 def chunk_pairs(x: list[int], y: list[int], seq_len: int, step: int | None = None) -> tuple[list[list[int]], list[list[int]]]:
