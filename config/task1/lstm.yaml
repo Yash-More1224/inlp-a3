@@ -8,7 +8,7 @@ training:
   device: cuda
   epochs: 50
   batch_size: 64
-  learning_rate: 0.0005
+  learning_rate: 0.001
 
 data:
   data_dir: data
