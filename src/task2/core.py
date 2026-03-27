@@ -236,7 +236,19 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
 
     use_wandb = bool(config["logging"].get("use_wandb", False))
     if use_wandb:
-        init_wandb(project=config["logging"]["project"], config=config, name=f"task2_{model_type}")
+        try:
+            # Set WandB to offline mode if no API key is available
+            import os
+            if not os.environ.get("WANDB_API_KEY"):
+                os.environ["WANDB_MODE"] = "offline"
+                print("⚠️ No WANDB_API_KEY found, running in offline mode")
+            
+            init_wandb(project=config["logging"]["project"], config=config, name=f"task2_{model_type}")
+            print("✓ WandB initialized successfully")
+        except Exception as e:
+            print(f"⚠️ WandB initialization failed: {e}")
+            print("Continuing without WandB logging...")
+            use_wandb = False
 
     if mode in {"train", "both"}:
         best_val = float("inf")
@@ -283,6 +295,9 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
         summary_path = Path(output_dirs["logs"]) / f"task2_{model_type}_train_summary.txt"
         write_text(str(summary_path), f"best_epoch={best_epoch}\nbest_val_loss={best_val:.6f}\n")
 
+        if use_wandb:
+            finish_wandb()
+
         if bool(config["hf"].get("push", False)):
             push_to_hub(
                 path=ckpt_path,
@@ -306,7 +321,7 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
         ppl = perplexity_from_loss(test_loss)
 
         if use_wandb:
-            log_wandb({"test_loss": test_loss, "perplexity": ppl})
+            log_wandb({"test_loss": test_loss, "perplexity": ppl}, step=best_epoch if best_epoch > 0 else epochs)
             finish_wandb()
 
         result_path = Path(output_dirs["results"]) / f"task2_{model_type}.txt"
