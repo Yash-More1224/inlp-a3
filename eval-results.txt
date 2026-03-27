@@ -1,0 +1,24 @@
+task 1:
+rnn:
+============================================================
+Evaluation Complete!
+============================================================
+Test Loss: 1.679675
+Character Accuracy: 52.2681%
+Word Accuracy: 22.5059%
+Levenshtein Distance: 269268
+============================================================
+Results saved to: outputs/results/task1_rnn.txt
+
+lstm:
+============================================================
+Evaluation Complete!
+============================================================
+Test Loss: 1.228632
+Character Accuracy: 63.9939%
+Word Accuracy: 42.9003%
+Levenshtein Distance: 203325
+============================================================
+Results saved to: outputs/results/task1_lstm.txt
+
+

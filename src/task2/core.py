@@ -145,7 +145,7 @@ def _run_bilstm_epoch(model, loader, criterion, optimizer, device):
     model.train(is_train)
     total_loss = 0.0
 
-    for x, y, _ in tqdm(loader, desc="Training" if is_train else "Evaluating", leave=False):
+    for x, y, _ in loader:
         x = x.to(device)
         y = y.to(device)
         logits = model(x)
@@ -167,7 +167,7 @@ def _run_ssm_epoch(model, loader, criterion, optimizer, device):
     model.train(is_train)
     total_loss = 0.0
 
-    for x, y in tqdm(loader, desc="Training" if is_train else "Evaluating", leave=False):
+    for x, y in loader:
         x = x.to(device)
         y = y.to(device)
         logits = model(x)
