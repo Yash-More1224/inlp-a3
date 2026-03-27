@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pickle
 import random
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.common.config import load_config
 from src.common.data import MASK, PairDataset, TripleDataset, build_vocab, read_plain_text, split_indices
@@ -15,6 +17,32 @@ from src.common.models import CustomBiLSTM, SimpleSSM
 from src.common.seed import set_seed
 from src.utils.checkpoints import load_checkpoint, save_checkpoint
 from src.utils.hf_wandb import finish_wandb, init_wandb, log_wandb, push_to_hub
+
+
+def _get_data_cache_path(output_dirs: dict) -> str:
+    """Get the cache file path for processed data."""
+    cache_dir = Path(output_dirs["logs"]) / "data_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return str(cache_dir / "task2_processed_data.pkl")
+
+
+def _load_data_cache(cache_path: str) -> dict | None:
+    """Load processed data from cache if it exists."""
+    path = Path(cache_path)
+    if path.exists():
+        print("✓ Loading processed data from cache...")
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    return None
+
+
+def _save_data_cache(cache_path: str, data: dict) -> None:
+    """Save processed data to cache."""
+    path = Path(cache_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'wb') as f:
+        pickle.dump(data, f)
+    print(f"✓ Saved processed data to cache: {cache_path}")
 
 
 def _build_word_chunks(word_ids: list[int], seq_len: int, step: int | None = None) -> list[list[int]]:
@@ -28,7 +56,21 @@ def _build_word_chunks(word_ids: list[int], seq_len: int, step: int | None = Non
     return chunks
 
 
-def _prepare_task2_data(config: dict):
+def _prepare_task2_data(config: dict, output_dirs: dict):
+    cache_path = _get_data_cache_path(output_dirs)
+    cached_data = _load_data_cache(cache_path)
+    
+    if cached_data is not None:
+        # Verify the cached data matches current config
+        if (cached_data['seq_len'] == int(config["data"]["seq_len"]) and
+            cached_data['step'] == int(config["data"].get("step", config["data"]["seq_len"])) and
+            cached_data['train_ratio'] == config["data"]["train_ratio"] and
+            cached_data['val_ratio'] == config["data"]["val_ratio"]):
+            return (cached_data['train_chunks'], cached_data['val_chunks'], 
+                   cached_data['test_chunks'], cached_data['vocab'])
+    
+    # Process data if not cached or cache is invalid
+    print("Processing data...")
     plain = read_plain_text(config["data"]["data_dir"])
     # Convert null characters (space placeholder) back to actual spaces for word splitting
     plain = plain.replace('\x00', ' ')
@@ -37,7 +79,8 @@ def _prepare_task2_data(config: dict):
     word_ids = vocab.encode(words)
 
     seq_len = int(config["data"]["seq_len"])
-    chunks = _build_word_chunks(word_ids, seq_len=seq_len, step=int(config["data"].get("step", seq_len)))
+    step = int(config["data"].get("step", seq_len))
+    chunks = _build_word_chunks(word_ids, seq_len=seq_len, step=step)
 
     train_idx, val_idx, test_idx = split_indices(len(chunks), config["data"]["train_ratio"], config["data"]["val_ratio"])
 
@@ -47,6 +90,20 @@ def _prepare_task2_data(config: dict):
     train_chunks = _pick(train_idx)
     val_chunks = _pick(val_idx)
     test_chunks = _pick(test_idx)
+    
+    # Cache the processed data
+    cache_data = {
+        'train_chunks': train_chunks,
+        'val_chunks': val_chunks,
+        'test_chunks': test_chunks,
+        'vocab': vocab,
+        'seq_len': seq_len,
+        'step': step,
+        'train_ratio': config["data"]["train_ratio"],
+        'val_ratio': config["data"]["val_ratio"]
+    }
+    _save_data_cache(cache_path, cache_data)
+    
     return train_chunks, val_chunks, test_chunks, vocab
 
 
@@ -88,7 +145,7 @@ def _run_bilstm_epoch(model, loader, criterion, optimizer, device):
     model.train(is_train)
     total_loss = 0.0
 
-    for x, y, _ in loader:
+    for x, y, _ in tqdm(loader, desc="Training" if is_train else "Evaluating", leave=False):
         x = x.to(device)
         y = y.to(device)
         logits = model(x)
@@ -110,7 +167,7 @@ def _run_ssm_epoch(model, loader, criterion, optimizer, device):
     model.train(is_train)
     total_loss = 0.0
 
-    for x, y in loader:
+    for x, y in tqdm(loader, desc="Training" if is_train else "Evaluating", leave=False):
         x = x.to(device)
         y = y.to(device)
         logits = model(x)
@@ -136,7 +193,7 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
     if device == "cuda" and not torch.cuda.is_available():
         device = "cpu"
 
-    train_chunks, val_chunks, test_chunks, vocab = _prepare_task2_data(config)
+    train_chunks, val_chunks, test_chunks, vocab = _prepare_task2_data(config, output_dirs)
 
     if model_type == "bilstm":
         train_ds = _make_mlm_dataset(train_chunks, vocab, mask_prob=float(config["data"].get("mask_prob", 0.15)))
@@ -182,9 +239,16 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
         best_epoch = -1
         epochs = int(config["training"]["epochs"])
 
-        for epoch in range(1, epochs + 1):
+        print(f"\n{'='*60}")
+        print(f"Starting Training on {model_type.upper()} - Device: {device}")
+        print(f"Total Epochs: {epochs} | Batch Size: {batch_size}")
+        print(f"{'='*60}\n")
+
+        for epoch in tqdm(range(1, epochs + 1), desc="Training Epochs", unit="epoch"):
             train_loss = run_epoch(model, train_loader, criterion, optimizer, device)
             val_loss = run_epoch(model, val_loader, criterion, optimizer=None, device=device)
+
+            print(f"Epoch {epoch:3d}/{epochs} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}", end="")
 
             if use_wandb:
                 log_wandb({"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch}, step=epoch)
@@ -193,6 +257,15 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
                 best_val = val_loss
                 best_epoch = epoch
                 save_checkpoint(model, optimizer, epoch, val_loss, ckpt_path)
+                print(" ✓ (checkpoint saved)")
+            else:
+                print()
+
+        print(f"\n{'='*60}")
+        print(f"Training Complete!")
+        print(f"Best Epoch: {best_epoch} | Best Val Loss: {best_val:.6f}")
+        print(f"Model saved at: {ckpt_path}")
+        print(f"{'='*60}\n")
 
         summary_path = Path(output_dirs["logs"]) / f"task2_{model_type}_train_summary.txt"
         write_text(str(summary_path), f"best_epoch={best_epoch}\nbest_val_loss={best_val:.6f}\n")
@@ -206,8 +279,17 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
             )
 
     if mode in {"evaluate", "both"}:
+        print(f"\n{'='*60}")
+        print(f"Starting Evaluation on {model_type.upper()}")
+        print(f"{'='*60}\n")
+
+        print("Loading checkpoint...")
         load_checkpoint(ckpt_path, model, optimizer=None, device=device)
+        
+        print("Computing test loss...")
         test_loss = run_epoch(model, test_loader, criterion, optimizer=None, device=device)
+        
+        print("Computing perplexity...")
         ppl = perplexity_from_loss(test_loss)
 
         if use_wandb:
@@ -223,3 +305,11 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
                 f"perplexity={ppl:.6f}",
             ]),
         )
+
+        print(f"\n{'='*60}")
+        print(f"Evaluation Complete!")
+        print(f"{'='*60}")
+        print(f"Test Loss: {test_loss:.6f}")
+        print(f"Perplexity: {ppl:.6f}")
+        print(f"{'='*60}")
+        print(f"Results saved to: {result_path}\n")
