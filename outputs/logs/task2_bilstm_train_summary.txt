@@ -1,0 +1,2 @@
+best_epoch=14
+best_val_loss=6.929662

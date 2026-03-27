@@ -1,0 +1,3 @@
+model=task2_bilstm
+test_loss=6.886152
+perplexity=978.628251

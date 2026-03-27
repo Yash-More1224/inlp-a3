@@ -1,0 +1,3 @@
+model=task2_ssm
+test_loss=7.057566
+perplexity=1161.614614
