@@ -23,29 +23,9 @@ def word_accuracy(pred: str, target: str) -> float:
 
 
 def levenshtein_distance(a: str, b: str) -> int:
-    """Calculate Levenshtein distance between two strings."""
-    try:
-        import Levenshtein
-        return Levenshtein.distance(a, b)
-    except ImportError:
-        # Fallback implementation if python-Levenshtein is not installed
-        if len(a) < len(b):
-            return levenshtein_distance(b, a)
-        
-        if len(b) == 0:
-            return len(a)
-        
-        previous_row = range(len(b) + 1)
-        for i, c1 in enumerate(a):
-            current_row = [i + 1]
-            for j, c2 in enumerate(b):
-                insertions = previous_row[j + 1] + 1
-                deletions = current_row[j] + 1
-                substitutions = previous_row[j] + (c1 != c2)
-                current_row.append(min(insertions, deletions, substitutions))
-            previous_row = current_row
-        
-        return previous_row[-1]
+    """Calculate Levenshtein distance between two strings using python-Levenshtein library."""
+    import Levenshtein
+    return Levenshtein.distance(a, b)
 
 
 def perplexity_from_loss(loss: float) -> float:
