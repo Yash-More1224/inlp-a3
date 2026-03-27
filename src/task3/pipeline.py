@@ -345,8 +345,8 @@ def main(config_path: str, mode: str) -> None:
         data_dir = config["data"]["data_dir"]
         cipher_path = str(Path(data_dir) / filename)
         
-        print(f"  Loading {filename}...")
-        cipher_noisy = read_cipher_tokens(filename, data_dir)
+        # Read cipher tokens (suppress verbose output)
+        cipher_noisy = read_cipher_tokens(filename, data_dir, verbose=False)
         
         # Check cache before decryption
         cache_data_path, cache_meta_path = _get_cache_path(cache_dir, filename, lm_type)
@@ -355,20 +355,15 @@ def main(config_path: str, mode: str) -> None:
         cached = _load_cache(cache_data_path, cache_meta_path, expected_metadata)
         
         if cached:
-            print(f"  ✓ Using cached results for {filename}")
+            print(f"  ✓ {filename}: loaded from cache")
             pred_raw = cached["pred_raw"]
             conf = cached["conf"]
             low_pos = cached["low_pos"]
             pred_corrected = cached["pred_corrected"]
         else:
-            print(f"  Decrypting {filename}...")
             pred_raw, conf = _decrypt_text(dec_model, cipher_noisy, cipher_vocab, char_vocab, seq_len=seq_len, device=device)
-
-            print(f"  Finding low-confidence words...")
             low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
-            print(f"    Found {len(low_pos)} low-confidence words to correct")
-
-            print(f"  Correcting with {lm_type.upper()} language model...")
+            
             if lm_type == "bilstm":
                 pred_corrected = _correct_with_bilstm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
             else:
@@ -382,8 +377,8 @@ def main(config_path: str, mode: str) -> None:
                 "pred_corrected": pred_corrected,
             }
             _save_cache(cache_data_path, cache_meta_path, cache_data, expected_metadata)
+            print(f"  ✓ {filename}: computed and cached")
 
-        print(f"  Computing metrics for {filename}...")
         m_raw = _compute_metrics(pred_raw, plain)
         m_corr = _compute_metrics(pred_corrected, plain)
 
@@ -413,7 +408,7 @@ def main(config_path: str, mode: str) -> None:
     input_file = config.get("input_file")
     output_text_file = config.get("output_text_file")
     if input_file and output_text_file:
-        cipher_custom = read_cipher_tokens(input_file, config["data"]["data_dir"])
+        cipher_custom = read_cipher_tokens(input_file, config["data"]["data_dir"], verbose=False)
         pred_raw, conf = _decrypt_text(dec_model, cipher_custom, cipher_vocab, char_vocab, seq_len=seq_len, device=device)
         low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
         if lm_type == "bilstm":

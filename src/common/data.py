@@ -61,7 +61,7 @@ def read_plain_text(data_dir: str = "data") -> str:
     return ''.join(result)
 
 
-def read_cipher_tokens(filename: str = "cipher_00.txt", data_dir: str = "data") -> list[str]:
+def read_cipher_tokens(filename: str = "cipher_00.txt", data_dir: str = "data", verbose: bool = True) -> list[str]:
     """
     Read cipher text and tokenize it properly.
     Encoding: regular characters = 2 digits, spaces = 1 digit ('9').
@@ -74,7 +74,7 @@ def read_cipher_tokens(filename: str = "cipher_00.txt", data_dir: str = "data") 
     
     tokens = []
     
-    for plain_line, cipher_line in tqdm(zip(plain_lines, cipher_lines), desc="Processing Cipher", total=len(plain_lines)):
+    for plain_line, cipher_line in tqdm(zip(plain_lines, cipher_lines), desc="Processing Cipher", total=len(plain_lines), disable=not verbose):
         # Count non-space characters and spaces in plain line
         non_space_chars = len(plain_line.replace(' ', ''))
         spaces = plain_line.count(' ')
