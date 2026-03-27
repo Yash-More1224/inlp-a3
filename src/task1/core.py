@@ -70,7 +70,18 @@ def _prepare_data(config: dict):
     val_ds = PairDataset(slice_by_indices(x_chunks, val_idx), slice_by_indices(y_chunks, val_idx))
     test_ds = PairDataset(slice_by_indices(x_chunks, test_idx), slice_by_indices(y_chunks, test_idx))
 
-    return train_ds, val_ds, test_ds, cipher_vocab, char_vocab, plain_text
+    # Calculate the token range for test data
+    if test_idx:
+        test_start_token = test_idx[0] * seq_len
+        test_end_token = min((test_idx[-1] + 1) * seq_len, len(cipher_tokens))
+        test_cipher_tokens = cipher_tokens[test_start_token:test_end_token]
+        test_plain_chars = chars[test_start_token:test_end_token]
+        test_plain_text = ''.join(test_plain_chars).replace('\x00', ' ')
+    else:
+        test_cipher_tokens = []
+        test_plain_text = ''
+
+    return train_ds, val_ds, test_ds, cipher_vocab, char_vocab, plain_text, test_cipher_tokens, test_plain_text
 
 
 def _run_epoch(model, loader, criterion, optimizer, device):
@@ -126,7 +137,7 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
     if device == "cuda" and not torch.cuda.is_available():
         device = "cpu"
 
-    train_ds, val_ds, test_ds, cipher_vocab, char_vocab, plain_text = _prepare_data(config)
+    train_ds, val_ds, test_ds, cipher_vocab, char_vocab, plain_text, test_cipher_tokens, test_plain_text = _prepare_data(config)
 
     batch_size = int(config["training"]["batch_size"])
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
@@ -213,21 +224,19 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         print("Computing test loss...")
         test_loss = _run_epoch(model, test_loader, criterion, optimizer=None, device=device)
 
-        print("Reading cipher tokens...")
-        cipher_tokens = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"])
-        
-        # Check for cached decoded text
+        print("Decoding test data...")
+        # Use only the test portion for evaluation metrics
         cache_path = _get_decoded_cache_path(output_dirs, cell_type)
         pred_text = _load_decoded_cache(cache_path)
         
         if pred_text is None:
             print("Decoding text...")
-            pred_text = _decode_text(model, cipher_tokens, cipher_vocab, char_vocab, int(config["data"]["seq_len"]), device)
+            pred_text = _decode_text(model, test_cipher_tokens, cipher_vocab, char_vocab, int(config["data"]["seq_len"]), device)
             _save_decoded_cache(cache_path, pred_text)
 
         print("Computing metrics...")
-        # Convert null characters back to spaces for metrics comparison
-        target_text = plain_text[: len(pred_text)].replace('\x00', ' ')
+        # Use test plain text for comparison
+        target_text = test_plain_text
         
         print("  - Computing character accuracy...")
         char_acc = character_accuracy(pred_text, target_text)
