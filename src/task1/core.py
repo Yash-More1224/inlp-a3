@@ -162,12 +162,7 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
     use_wandb = bool(config["logging"].get("use_wandb", False))
     if use_wandb:
         try:
-            # Set WandB to offline mode if no API key is available
-            import os
-            if not os.environ.get("WANDB_API_KEY"):
-                os.environ["WANDB_MODE"] = "offline"
-                print("⚠️ No WANDB_API_KEY found, running in offline mode")
-            
+            # Initialize WandB for experiment tracking
             init_wandb(
                 project=config["logging"]["project"],
                 config=config,

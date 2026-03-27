@@ -1,4 +1,5 @@
 import os
+import sys
 
 import torch
 import wandb
@@ -6,6 +7,25 @@ from huggingface_hub import HfApi, hf_hub_download
 
 
 def init_wandb(project: str, config: dict, name: str | None = None) -> wandb.sdk.wandb_run.Run:
+    """Initialize WandB with API key handling."""
+    # Check for API key in config first, then environment
+    api_key = config.get("logging", {}).get("wandb_api_key") or os.environ.get("WANDB_API_KEY")
+    
+    if api_key:
+        # Set the API key and ensure online mode
+        os.environ["WANDB_API_KEY"] = api_key
+        os.environ.pop("WANDB_MODE", None)  # Remove offline mode if set
+        print("✓ WANDB_API_KEY found, enabling cloud sync")
+    else:
+        # Try to use stored credentials or prompt user
+        try:
+            wandb.login()
+            print("✓ WandB login successful, enabling cloud sync")
+        except Exception as e:
+            print(f"⚠️ WandB login failed: {e}")
+            print("⚠️ Running in offline mode (data will be saved locally)")
+            os.environ["WANDB_MODE"] = "offline"
+    
     return wandb.init(project=project, config=config, name=name)
 
 
