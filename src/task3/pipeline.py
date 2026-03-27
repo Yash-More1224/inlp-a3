@@ -150,7 +150,10 @@ def main(config_path: str, mode: str) -> None:
 
     cipher_vocab = build_vocab(cipher_clean)
     char_vocab = build_vocab(chars)
-    lm_vocab = build_vocab(plain.split(), add_mask=True)
+
+    # Build language model vocabulary like Task 2: word-level with spaces restored
+    plain_words = plain.replace('\x00', ' ').split()
+    lm_vocab = build_vocab(plain_words, add_mask=True)
 
     dec_model = DecryptionModel(
         input_vocab_size=len(cipher_vocab.itos),
