@@ -17,6 +17,30 @@ from src.utils.checkpoints import load_checkpoint, save_checkpoint
 from src.utils.hf_wandb import finish_wandb, init_wandb, log_wandb, push_to_hub, save_checkpoint_to_wandb
 
 
+def _get_decoded_cache_path(output_dirs: dict, cell_type: str) -> str:
+    """Get the cache file path for decoded text."""
+    cache_dir = Path(output_dirs["logs"]) / "decoded_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return str(cache_dir / f"task1_{cell_type}_decoded.txt")
+
+
+def _load_decoded_cache(cache_path: str) -> str | None:
+    """Load decoded text from cache if it exists."""
+    path = Path(cache_path)
+    if path.exists():
+        print(f"✓ Loading decoded text from cache: {cache_path}")
+        return path.read_text(encoding="utf-8")
+    return None
+
+
+def _save_decoded_cache(cache_path: str, text: str) -> None:
+    """Save decoded text to cache."""
+    path = Path(cache_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    print(f"✓ Saved decoded text to cache: {cache_path}")
+
+
 def _prepare_data(config: dict):
     data_dir = config["data"]["data_dir"]
     plain_text = read_plain_text(data_dir)
@@ -192,17 +216,33 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         print("Reading cipher tokens...")
         cipher_tokens = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"])
         
-        print("Decoding text...")
-        pred_text = _decode_text(model, cipher_tokens, cipher_vocab, char_vocab, int(config["data"]["seq_len"]), device)
+        # Check for cached decoded text
+        cache_path = _get_decoded_cache_path(output_dirs, cell_type)
+        pred_text = _load_decoded_cache(cache_path)
+        
+        if pred_text is None:
+            print("Decoding text...")
+            pred_text = _decode_text(model, cipher_tokens, cipher_vocab, char_vocab, int(config["data"]["seq_len"]), device)
+            _save_decoded_cache(cache_path, pred_text)
 
         print("Computing metrics...")
         # Convert null characters back to spaces for metrics comparison
         target_text = plain_text[: len(pred_text)].replace('\x00', ' ')
+        
+        print("  - Computing character accuracy...")
+        char_acc = character_accuracy(pred_text, target_text)
+        
+        print("  - Computing word accuracy...")
+        word_acc = word_accuracy(pred_text, target_text)
+        
+        print("  - Computing Levenshtein distance (this may take a minute)...")
+        lev_dist = float(levenshtein_distance(pred_text, target_text))
+        
         metrics = {
             "test_loss": test_loss,
-            "char_accuracy": character_accuracy(pred_text, target_text),
-            "word_accuracy": word_accuracy(pred_text, target_text),
-            "levenshtein": float(levenshtein_distance(pred_text, target_text)),
+            "char_accuracy": char_acc,
+            "word_accuracy": word_acc,
+            "levenshtein": lev_dist,
         }
 
         if use_wandb:
