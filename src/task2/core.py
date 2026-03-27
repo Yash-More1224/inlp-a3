@@ -314,8 +314,21 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
         print("Computing perplexity...")
         ppl = perplexity_from_loss(test_loss)
 
+        # Get best_epoch for WandB logging step
+        best_epoch = -1
+        summary_path = Path(output_dirs["logs"]) / f"task2_{model_type}_train_summary.txt"
+        if summary_path.exists():
+            try:
+                summary_content = summary_path.read_text()
+                for line in summary_content.strip().split('\n'):
+                    if line.startswith('best_epoch='):
+                        best_epoch = int(line.split('=')[1])
+                        break
+            except Exception:
+                pass  # Use default if reading fails
+
         if use_wandb:
-            log_wandb({"test_loss": test_loss, "perplexity": ppl}, step=best_epoch if best_epoch > 0 else epochs)
+            log_wandb({"test_loss": test_loss, "perplexity": ppl}, step=best_epoch if best_epoch > 0 else 1)
             finish_wandb()
 
         result_path = Path(output_dirs["results"]) / f"task2_{model_type}.txt"

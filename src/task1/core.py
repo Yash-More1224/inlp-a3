@@ -228,6 +228,19 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         print(f"Starting Evaluation on {cell_type.upper()}")
         print(f"{'='*60}\n")
 
+        # Get best_epoch for WandB logging step
+        best_epoch = -1
+        summary_path = Path(output_dirs["logs"]) / f"task1_{cell_type}_train_summary.txt"
+        if summary_path.exists():
+            try:
+                summary_content = summary_path.read_text()
+                for line in summary_content.strip().split('\n'):
+                    if line.startswith('best_epoch='):
+                        best_epoch = int(line.split('=')[1])
+                        break
+            except Exception:
+                pass  # Use default if reading fails
+
         print("Loading checkpoint...")
         load_checkpoint(ckpt_path, model, optimizer=None, device=device)
         
@@ -265,7 +278,7 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         }
 
         if use_wandb:
-            log_wandb(metrics, step=best_epoch if best_epoch > 0 else epochs)
+            log_wandb(metrics, step=best_epoch if best_epoch > 0 else 1)
             finish_wandb()
 
         result_path = Path(output_dirs["results"]) / f"task1_{cell_type}.txt"
