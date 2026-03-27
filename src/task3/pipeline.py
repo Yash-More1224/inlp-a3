@@ -74,7 +74,12 @@ def _load_cache(
         
         # Validate metadata matches
         if stored_metadata != expected_metadata:
-            print(f"    (cache invalidated: config/checkpoint changed)")
+            # Cache invalidated - check which field changed
+            for key in expected_metadata:
+                if key not in stored_metadata:
+                    return None
+                if stored_metadata[key] != expected_metadata[key]:
+                    return None
             return None
         
         with open(cache_data, "rb") as f:
@@ -82,8 +87,7 @@ def _load_cache(
         
         return cache
     except Exception as e:
-        print(f"    (cache load failed: {e})")
-        return None
+        return None  # Silently fail if cache load fails
 
 
 def _save_cache(cache_data: Path, cache_meta: Path, cache: dict, metadata: dict) -> None:
@@ -281,7 +285,7 @@ def main(config_path: str, mode: str) -> None:
         device = "cpu"
 
     plain = read_plain_text(config["data"]["data_dir"])
-    cipher_clean = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"])
+    cipher_clean = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"], verbose=False)
     chars = list(plain)[: len(cipher_clean)]
     cipher_clean = cipher_clean[: len(chars)]
 
