@@ -20,8 +20,8 @@ output:
 
 decryption_model:
   cell_type: lstm
-  embedding_dim: 128
-  hidden_size: 256
+  embedding_dim: 256
+  hidden_size: 512
   dropout: 0.2
   checkpoint_path: outputs/logs/checkpoints/task1_lstm.pt
   hf_filename: task1_lstm.pt
