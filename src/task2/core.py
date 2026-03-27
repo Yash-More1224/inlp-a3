@@ -225,7 +225,11 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"]["learning_rate"]))
+    optimizer = torch.optim.Adam(
+        model.parameters(), 
+        lr=float(config["training"]["learning_rate"]),
+        weight_decay=float(config["training"].get("weight_decay", 0.0))
+    )
 
     ckpt_path = config["output"]["checkpoint_path"]
     ckpt_path = ckpt_path.format(model=model_type)
@@ -238,10 +242,12 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
         best_val = float("inf")
         best_epoch = -1
         epochs = int(config["training"]["epochs"])
+        patience = int(config["training"].get("patience", epochs))  # Early stopping patience
+        patience_counter = 0
 
         print(f"\n{'='*60}")
         print(f"Starting Training on {model_type.upper()} - Device: {device}")
-        print(f"Total Epochs: {epochs} | Batch Size: {batch_size}")
+        print(f"Total Epochs: {epochs} | Batch Size: {batch_size} | Patience: {patience}")
         print(f"{'='*60}\n")
 
         for epoch in tqdm(range(1, epochs + 1), desc="Training Epochs", unit="epoch"):
@@ -256,10 +262,17 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
             if val_loss < best_val:
                 best_val = val_loss
                 best_epoch = epoch
+                patience_counter = 0  # Reset patience counter
                 save_checkpoint(model, optimizer, epoch, val_loss, ckpt_path)
                 print(" ✓ (checkpoint saved)")
             else:
-                print()
+                patience_counter += 1
+                print(f" | Patience: {patience_counter}/{patience}")
+                
+                # Early stopping
+                if patience_counter >= patience:
+                    print(f"\nEarly stopping triggered after {epoch} epochs (no improvement for {patience} epochs)")
+                    break
 
         print(f"\n{'='*60}")
         print(f"Training Complete!")
