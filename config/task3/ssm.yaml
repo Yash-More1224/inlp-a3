@@ -29,6 +29,7 @@ decryption_model:
   embedding_dim: 256
   hidden_size: 512
   dropout: 0.2
+  num_layers: 2
   checkpoint_path: outputs/logs/checkpoints/task1_lstm.pt
   hf_filename: task1_lstm.pt
   hf:

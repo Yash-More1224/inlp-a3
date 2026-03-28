@@ -288,6 +288,7 @@ def main(config_path: str, mode: str) -> None:
         hidden_size=int(config["decryption_model"]["hidden_size"]),
         dropout=float(config["decryption_model"]["dropout"]),
         cell_type=config["decryption_model"]["cell_type"],
+        num_layers=int(config["decryption_model"].get("num_layers", 1)),
     ).to(device)
 
     lm_type = config["language_model"]["type"]
