@@ -72,8 +72,9 @@ def _prepare_data(config: dict):
 
     # Calculate the token range for test data
     if test_idx:
-        test_start_token = test_idx[0] * seq_len
-        test_end_token = min((test_idx[-1] + 1) * seq_len, len(cipher_tokens))
+        test_start_token = test_idx[0] * step  # MUST use step, not seq_len, because chunks overlap
+        # The last chunk covers up to its start index + seq_len
+        test_end_token = min((test_idx[-1] * step) + seq_len, len(cipher_tokens))
         test_cipher_tokens = cipher_tokens[test_start_token:test_end_token]
         test_plain_chars = chars[test_start_token:test_end_token]
         test_plain_text = ''.join(test_plain_chars).replace('\x00', ' ')
