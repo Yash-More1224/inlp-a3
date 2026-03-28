@@ -270,8 +270,6 @@ def main(config_path: str, mode: str) -> None:
         dropout=float(config["decryption_model"]["dropout"]),
         cell_type=config["decryption_model"]["cell_type"],
     ).to(device)
-    if num_gpus > 1:
-        dec_model = torch.nn.DataParallel(dec_model)
 
     lm_type = config["language_model"]["type"]
     if lm_type == "bilstm":
@@ -288,9 +286,10 @@ def main(config_path: str, mode: str) -> None:
             state_size=int(config["language_model"]["state_size"]),
             dropout=float(config["language_model"]["dropout"]),
         ).to(device)
-    if num_gpus > 1:
-        lm_model = torch.nn.DataParallel(lm_model)
 
+    # Load checkpoints on bare models BEFORE wrapping with DataParallel.
+    # DataParallel adds a "module." prefix to all state dict keys, so loading
+    # a checkpoint saved without it into a wrapped model causes key mismatches.
     dec_local = config["decryption_model"]["checkpoint_path"]
     dec_file = config["decryption_model"].get("hf_filename", Path(dec_local).name)
     dec_ckpt = _resolve_checkpoint(config["decryption_model"].get("hf", {}), dec_local, dec_file)
@@ -300,6 +299,11 @@ def main(config_path: str, mode: str) -> None:
     lm_file = config["language_model"].get("hf_filename", Path(lm_local).name)
     lm_ckpt = _resolve_checkpoint(config["language_model"].get("hf", {}), lm_local, lm_file)
     load_checkpoint(lm_ckpt, lm_model, optimizer=None, device=device)
+
+    # Now safe to wrap — DataParallel only affects forward() dispatch, not state.
+    if num_gpus > 1:
+        dec_model = torch.nn.DataParallel(dec_model)
+        lm_model = torch.nn.DataParallel(lm_model)
 
     noisy_files = config["data"].get("noisy_files", ["cipher_01.txt", "cipher_02.txt", "cipher_03.txt", "cipher_04.txt"])
     seq_len = int(config["data"].get("seq_len", 128))
