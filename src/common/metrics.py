@@ -60,25 +60,53 @@ def corpus_bleu(pred: str, target: str, max_n: int = 4) -> float:
         return hits / max(1, len(p))
 
 
-def rouge_l_f1(pred: str, target: str) -> float:
-    """ROUGE-L F1 using the rouge_score library (C-backed) — avoids the O(N²)
-    worst-case of difflib.SequenceMatcher on 500K-word lists."""
-    if not pred.strip() or not target.strip():
+def rouge_l_f1(pred: str, target: str, chunk_words: int = 5000) -> float:
+    """ROUGE-L F1 computed in word-chunks to avoid O(N²) LCS memory on large texts.
+
+    rouge_score's ROUGE-L allocates a full LCS DP matrix (N×M words).
+    For 514K words that is ~2 TB of RAM and causes OOM.
+    Instead we split into chunks of `chunk_words` words, compute per-chunk
+    ROUGE-L F1, then return the (weighted) average.
+    """
+    p_words = pred.split()
+    t_words = target.split()
+    if not p_words or not t_words:
         return 0.0
+
     try:
         from rouge_score import rouge_scorer
         scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=False)
-        result = scorer.score(target, pred)
-        return float(result["rougeL"].fmeasure)
+
+        scores, weights = [], []
+        max_len = max(len(p_words), len(t_words))
+        for i in range(0, max_len, chunk_words):
+            p_chunk = " ".join(p_words[i : i + chunk_words])
+            t_chunk = " ".join(t_words[i : i + chunk_words])
+            if not p_chunk or not t_chunk:
+                continue
+            result = scorer.score(t_chunk, p_chunk)
+            chunk_len = max(
+                len(p_words[i : i + chunk_words]),
+                len(t_words[i : i + chunk_words]),
+            )
+            scores.append(result["rougeL"].fmeasure)
+            weights.append(chunk_len)
+
+        if not scores:
+            return 0.0
+        total_weight = sum(weights)
+        return float(sum(s * w for s, w in zip(scores, weights)) / total_weight)
+
     except Exception:
-        # Fallback: fast token overlap F1
-        p = set(pred.split())
-        t = set(target.split())
+        # Fallback: fast token-overlap F1 (no LCS, no memory pressure)
+        p = set(p_words)
+        t = set(t_words)
         if not p or not t:
             return 0.0
         overlap = len(p & t)
-        precision = overlap / max(1, len(p))
-        recall = overlap / max(1, len(t))
+        precision = overlap / max(1, len(p_words))
+        recall = overlap / max(1, len(t_words))
         if precision + recall == 0:
             return 0.0
         return float(2 * precision * recall / (precision + recall))
+
