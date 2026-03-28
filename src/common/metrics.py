@@ -60,53 +60,40 @@ def corpus_bleu(pred: str, target: str, max_n: int = 4) -> float:
         return hits / max(1, len(p))
 
 
-def rouge_l_f1(pred: str, target: str, chunk_words: int = 5000) -> float:
-    """ROUGE-L F1 computed in word-chunks to avoid O(N²) LCS memory on large texts.
+def rouge_l_f1(pred: str, target: str, chunk_words: int = 2000) -> float:
+    """ROUGE-L F1 using chunked difflib.SequenceMatcher.
 
-    rouge_score's ROUGE-L allocates a full LCS DP matrix (N×M words).
-    For 514K words that is ~2 TB of RAM and causes OOM.
-    Instead we split into chunks of `chunk_words` words, compute per-chunk
-    ROUGE-L F1, then return the (weighted) average.
+    rouge_score's ROUGE-L builds Python-list LCS tables: even at 5K-word
+    chunks that is 5K*5K*28 bytes ~700 MB per chunk, and Python GC does not
+    release between iterations -> OOM.
+    difflib.SequenceMatcher is C-backed and uses O(N) memory (Ratcliff-
+    Obershelp matching blocks, no explicit matrix), so it never OOMs.
+    We accumulate LCS hits, p_len, t_len across chunks and compute global F1.
     """
+    import difflib
+
     p_words = pred.split()
     t_words = target.split()
     if not p_words or not t_words:
         return 0.0
 
-    try:
-        from rouge_score import rouge_scorer
-        scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=False)
+    total_lcs = 0
+    total_p = 0
+    total_t = 0
 
-        scores, weights = [], []
-        max_len = max(len(p_words), len(t_words))
-        for i in range(0, max_len, chunk_words):
-            p_chunk = " ".join(p_words[i : i + chunk_words])
-            t_chunk = " ".join(t_words[i : i + chunk_words])
-            if not p_chunk or not t_chunk:
-                continue
-            result = scorer.score(t_chunk, p_chunk)
-            chunk_len = max(
-                len(p_words[i : i + chunk_words]),
-                len(t_words[i : i + chunk_words]),
-            )
-            scores.append(result["rougeL"].fmeasure)
-            weights.append(chunk_len)
+    max_len = max(len(p_words), len(t_words))
+    for i in range(0, max_len, chunk_words):
+        p_chunk = p_words[i : i + chunk_words]
+        t_chunk = t_words[i : i + chunk_words]
+        if not p_chunk or not t_chunk:
+            continue
+        sm = difflib.SequenceMatcher(None, p_chunk, t_chunk, autojunk=False)
+        total_lcs += sum(block.size for block in sm.get_matching_blocks())
+        total_p += len(p_chunk)
+        total_t += len(t_chunk)
 
-        if not scores:
-            return 0.0
-        total_weight = sum(weights)
-        return float(sum(s * w for s, w in zip(scores, weights)) / total_weight)
-
-    except Exception:
-        # Fallback: fast token-overlap F1 (no LCS, no memory pressure)
-        p = set(p_words)
-        t = set(t_words)
-        if not p or not t:
-            return 0.0
-        overlap = len(p & t)
-        precision = overlap / max(1, len(p_words))
-        recall = overlap / max(1, len(t_words))
-        if precision + recall == 0:
-            return 0.0
-        return float(2 * precision * recall / (precision + recall))
-
+    precision = total_lcs / max(1, total_p)
+    recall = total_lcs / max(1, total_t)
+    if precision + recall == 0:
+        return 0.0
+    return float(2 * precision * recall / (precision + recall))
