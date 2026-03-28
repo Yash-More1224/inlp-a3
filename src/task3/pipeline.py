@@ -27,27 +27,43 @@ def _resolve_checkpoint(hf_cfg: dict, local_path: str, filename: str) -> str:
 
 
 @torch.no_grad()
-def _decrypt_text(model, cipher_tokens: list[str], cipher_vocab, char_vocab, seq_len: int, device: str) -> tuple[str, list[float]]:
+def _decrypt_text(
+    model, cipher_tokens: list[str], cipher_vocab, char_vocab,
+    seq_len: int, device: str, batch_size: int = 256
+) -> tuple[str, list[float]]:
+    """Decrypt cipher tokens using fully-batched GPU inference."""
     model.eval()
     ids = cipher_vocab.encode(cipher_tokens)
+
+    # Slice the full sequence into non-overlapping chunks
+    chunks = [ids[s : s + seq_len] for s in range(0, len(ids), seq_len) if ids[s : s + seq_len]]
+    if not chunks:
+        return "", []
+
     out_chars: list[str] = []
     confs: list[float] = []
 
-    for start in range(0, len(ids), seq_len):
-        chunk = ids[start : start + seq_len]
-        if not chunk:
-            continue
-        x = torch.tensor(chunk, dtype=torch.long, device=device).unsqueeze(0)
-        logits = model(x)
-        probs = torch.softmax(logits, dim=-1)
-        pred = probs.argmax(dim=-1).squeeze(0).tolist()
-        mx = probs.max(dim=-1).values.squeeze(0).tolist()
-        out_chars.extend(char_vocab.decode(pred, skip_special=False))
-        confs.extend([float(v) for v in mx])
+    # Process chunks in large GPU batches
+    for b_start in range(0, len(chunks), batch_size):
+        batch_chunks = chunks[b_start : b_start + batch_size]
+        # Pad to the longest chunk in this mini-batch
+        max_len = max(len(c) for c in batch_chunks)
+        pad_id = cipher_vocab.stoi.get("<pad>", 0)
+        padded = [c + [pad_id] * (max_len - len(c)) for c in batch_chunks]
 
-    # Convert null characters (space placeholder) back to spaces
-    result = "".join(out_chars)
-    result = result.replace('\x00', ' ')
+        x = torch.tensor(padded, dtype=torch.long, device=device)  # (B, T)
+        logits = model(x)                                           # (B, T, vocab)
+        probs = torch.softmax(logits, dim=-1)
+        preds = probs.argmax(dim=-1)   # (B, T)
+        maxp  = probs.max(dim=-1).values  # (B, T)
+
+        # Unpad and collect — only keep positions that were real tokens
+        for i, orig_chunk in enumerate(batch_chunks):
+            real_len = len(orig_chunk)
+            out_chars.extend(char_vocab.decode(preds[i, :real_len].tolist(), skip_special=False))
+            confs.extend(maxp[i, :real_len].tolist())
+
+    result = "".join(out_chars).replace("\x00", " ")
     return result, confs
 
 
@@ -72,18 +88,18 @@ def _find_low_conf_word_positions(text: str, char_conf: list[float], threshold: 
 
 
 @torch.no_grad()
-def _correct_with_bilstm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_len: int, device: str) -> str:
+def _correct_with_bilstm(
+    text: str, low_pos: list[int], lm_model, lm_vocab,
+    seq_len: int, device: str, batch_size: int = 256
+) -> str:
     words = text.split()
     if not words:
         return text
 
     mask_id = lm_vocab.stoi[MASK]
     unk_id = lm_vocab.stoi.get("<unk>", 0)
-
     total = len(low_pos)
-    batch_size = 32
 
-    # Single progress bar over all positions, updates only every 1000 to avoid log flooding
     pbar = tqdm(
         total=total,
         desc="BiLSTM Correction",
@@ -94,12 +110,12 @@ def _correct_with_bilstm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_
         bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n}/{total} [{elapsed}<{remaining}]",
     )
 
-    for batch_start in range(0, total, batch_size):
-        batch = low_pos[batch_start : batch_start + batch_size]
+    for b_start in range(0, total, batch_size):
+        batch = low_pos[b_start : b_start + batch_size]
 
-        windows_list = []
-        local_pos_list = []
-        pos_list = []
+        windows_list: list[list[int]] = []
+        local_pos_list: list[int] = []
+        pos_list: list[int] = []
 
         for pos in batch:
             left = max(0, pos - seq_len // 2)
@@ -121,13 +137,13 @@ def _correct_with_bilstm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_
             continue
 
         max_len = max(len(w) for w in windows_list)
-        padded_windows = [w + [lm_vocab.stoi.get(MASK, mask_id)] * (max_len - len(w)) for w in windows_list]
+        padded = [w + [mask_id] * (max_len - len(w)) for w in windows_list]
 
-        xt = torch.tensor(padded_windows, dtype=torch.long, device=device)
-        logits = lm_model(xt)
+        xt = torch.tensor(padded, dtype=torch.long, device=device)  # (B, T)
+        logits = lm_model(xt)                                        # (B, T, vocab)
 
-        for batch_idx, (local_pos, pos) in enumerate(zip(local_pos_list, pos_list)):
-            pred_id = int(logits[batch_idx, local_pos].argmax().item())
+        for i, (local_pos, pos) in enumerate(zip(local_pos_list, pos_list)):
+            pred_id = int(logits[i, local_pos].argmax().item())
             pred_word = lm_vocab.itos[pred_id]
             if not pred_word.startswith("<"):
                 words[pos] = pred_word
@@ -139,7 +155,16 @@ def _correct_with_bilstm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_
 
 
 @torch.no_grad()
-def _correct_with_ssm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_len: int, device: str) -> str:
+def _correct_with_ssm(
+    text: str, low_pos: list[int], lm_model, lm_vocab,
+    seq_len: int, device: str, batch_size: int = 256
+) -> str:
+    """Correct low-confidence words using the SSM language model.
+
+    Uses a capped sliding-window context (last `seq_len` tokens before `pos`)
+    so every sequence in the batch has the same bounded length, avoiding the
+    O(N) padding blow-up that made early positions tiny and late positions huge.
+    """
     words = text.split()
     if len(words) < 2:
         return text
@@ -149,9 +174,7 @@ def _correct_with_ssm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_len
     ids = [lm_vocab.stoi.get(w, unk_id) for w in words]
 
     total = len(low_pos)
-    batch_size = 32
 
-    # Single progress bar, updates only every 1000 positions to avoid log flooding
     pbar = tqdm(
         total=total,
         desc="SSM Correction",
@@ -162,38 +185,40 @@ def _correct_with_ssm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_len
         bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n}/{total} [{elapsed}<{remaining}]",
     )
 
-    for batch_start in range(0, total, batch_size):
-        batch = low_pos[batch_start : batch_start + batch_size]
+    for b_start in range(0, total, batch_size):
+        batch = low_pos[b_start : b_start + batch_size]
 
-        contexts = []
-        valid_pos = []
+        contexts: list[list[int]] = []
+        valid_pos: list[int] = []
 
         for pos in batch:
-            if pos == 0 or pos - 1 >= len(ids):
+            if pos == 0:
                 continue
-            context_ids = ids[:pos]
-            if context_ids:
-                contexts.append(context_ids)
+            # Use only the last seq_len tokens before pos (sliding window)
+            start = max(0, pos - seq_len)
+            context = ids[start:pos]   # length ≤ seq_len, always > 0
+            if context:
+                contexts.append(context)
                 valid_pos.append(pos)
 
         if not contexts:
             pbar.update(len(batch))
             continue
 
-        max_len = max(len(c) for c in contexts)
-        padded_contexts = [c + [mask_id] * (max_len - len(c)) for c in contexts]
+        # Pad left so every context is seq_len tokens (left-padding mirrors
+        # what a causal model expects when context is shorter)
+        padded = [[mask_id] * (seq_len - len(c)) + c for c in contexts]
 
-        x = torch.tensor(padded_contexts, dtype=torch.long, device=device)
-        logits = lm_model(x)
+        x = torch.tensor(padded, dtype=torch.long, device=device)  # (B, seq_len)
+        logits = lm_model(x)                                        # (B, seq_len, vocab)
 
-        # Fix: iterate directly, not zip(valid_pos) which wraps each element in a tuple
-        for batch_idx, pos_val in enumerate(valid_pos):
-            pred_pos_idx = len(contexts[batch_idx]) - 1
-            if 0 <= pred_pos_idx < logits.size(1):
-                pred_id = int(logits[batch_idx, pred_pos_idx].argmax().item())
-                pred_word = lm_vocab.itos[pred_id]
-                if not pred_word.startswith("<"):
-                    words[pos_val] = pred_word
+        for i, pos_val in enumerate(valid_pos):
+            # Prediction for the next word comes from the last real context position
+            last_idx = seq_len - 1  # always the rightmost token after left-padding
+            pred_id = int(logits[i, last_idx].argmax().item())
+            pred_word = lm_vocab.itos[pred_id]
+            if not pred_word.startswith("<"):
+                words[pos_val] = pred_word
 
         pbar.update(len(batch))
 
@@ -271,6 +296,8 @@ def main(config_path: str, mode: str) -> None:
     noisy_files = config["data"].get("noisy_files", ["cipher_01.txt", "cipher_02.txt", "cipher_03.txt", "cipher_04.txt"])
     seq_len = int(config["data"].get("seq_len", 128))
     conf_threshold = float(config.get("confidence_threshold", 0.6))
+    batch_size = int(config.get("batch_size", 256))
+    lm_seq_len = int(config["language_model"].get("seq_len", 32))
 
     sections = [f"pipeline=task3_{lm_type}", f"mode={mode}"]
 
@@ -300,13 +327,22 @@ def main(config_path: str, mode: str) -> None:
 
         cipher_noisy = read_cipher_tokens(filename, data_dir, verbose=False)
 
-        pred_raw, conf = _decrypt_text(dec_model, cipher_noisy, cipher_vocab, char_vocab, seq_len=seq_len, device=device)
+        pred_raw, conf = _decrypt_text(
+            dec_model, cipher_noisy, cipher_vocab, char_vocab,
+            seq_len=seq_len, device=device, batch_size=batch_size
+        )
         low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
 
         if lm_type == "bilstm":
-            pred_corrected = _correct_with_bilstm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
+            pred_corrected = _correct_with_bilstm(
+                pred_raw, low_pos, lm_model, lm_vocab,
+                seq_len=lm_seq_len, device=device, batch_size=batch_size
+            )
         else:
-            pred_corrected = _correct_with_ssm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
+            pred_corrected = _correct_with_ssm(
+                pred_raw, low_pos, lm_model, lm_vocab,
+                seq_len=lm_seq_len, device=device, batch_size=batch_size
+            )
 
         m_raw = _compute_metrics(pred_raw, plain)
         m_corr = _compute_metrics(pred_corrected, plain)
@@ -360,10 +396,19 @@ def main(config_path: str, mode: str) -> None:
     output_text_file = config.get("output_text_file")
     if input_file and output_text_file:
         cipher_custom = read_cipher_tokens(input_file, config["data"]["data_dir"], verbose=False)
-        pred_raw, conf = _decrypt_text(dec_model, cipher_custom, cipher_vocab, char_vocab, seq_len=seq_len, device=device)
+        pred_raw, conf = _decrypt_text(
+            dec_model, cipher_custom, cipher_vocab, char_vocab,
+            seq_len=seq_len, device=device, batch_size=batch_size
+        )
         low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
         if lm_type == "bilstm":
-            pred_custom = _correct_with_bilstm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
+            pred_custom = _correct_with_bilstm(
+                pred_raw, low_pos, lm_model, lm_vocab,
+                seq_len=lm_seq_len, device=device, batch_size=batch_size
+            )
         else:
-            pred_custom = _correct_with_ssm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
+            pred_custom = _correct_with_ssm(
+                pred_raw, low_pos, lm_model, lm_vocab,
+                seq_len=lm_seq_len, device=device, batch_size=batch_size
+            )
         write_text(output_text_file, pred_custom)
