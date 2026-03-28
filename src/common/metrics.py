@@ -97,3 +97,12 @@ def rouge_l_f1(pred: str, target: str, chunk_words: int = 2000) -> float:
     if precision + recall == 0:
         return 0.0
     return float(2 * precision * recall / (precision + recall))
+
+
+def chrf_score(pred: str, target: str) -> float:
+    """chrF score via sacrebleu — char n-gram F1, robust to noisy word boundaries."""
+    if not pred.strip() or not target.strip():
+        return 0.0
+    import sacrebleu
+    result = sacrebleu.corpus_chrf([pred], [[target]])
+    return float(result.score) / 100.0

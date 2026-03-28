@@ -8,7 +8,7 @@ from tqdm import tqdm
 from src.common.config import load_config
 from src.common.data import MASK, build_vocab, read_cipher_tokens, read_plain_text
 from src.common.io_utils import ensure_output_dirs, write_text
-from src.common.metrics import character_accuracy, corpus_bleu, levenshtein_distance, rouge_l_f1, word_accuracy
+from src.common.metrics import character_accuracy, corpus_bleu, levenshtein_distance, rouge_l_f1, word_accuracy, chrf_score
 from src.common.models import CustomBiLSTM, DecryptionModel, SimpleSSM
 from src.common.seed import set_seed
 from src.utils.checkpoints import load_checkpoint
@@ -73,22 +73,14 @@ def _decrypt_text(
     return result, confs
 
 
-def _find_low_conf_word_positions(text: str, char_conf: list[float], threshold: float) -> list[int]:
-    words = text.split()
-    if not words:
+def _find_low_conf_char_positions(text: str, char_conf: list[float], threshold: float) -> list[int]:
+    chars = list(text)
+    if not chars:
         return []
 
     positions = []
-    cursor = 0
-    for idx, w in enumerate(words):
-        start = text.find(w, cursor)
-        end = start + len(w)
-        cursor = end
-        if start < 0:
-            continue
-        vals = char_conf[start:end] if end <= len(char_conf) else []
-        avg = sum(vals) / max(1, len(vals)) if vals else 0.0
-        if avg < threshold:
+    for idx, conf in enumerate(char_conf):
+        if idx < len(chars) and conf < threshold:
             positions.append(idx)
     return positions
 
@@ -99,14 +91,14 @@ def _correct_with_bilstm(
     seq_len: int, device: str, batch_size: int = 256,
     aux_models: list | None = None,
 ) -> str:
-    """Correct low-confidence words with BiLSTM.
+    """Correct low-confidence chars with BiLSTM.
 
     aux_models: optional list of (model, device_str) for additional GPUs.
     Batches are round-robined across [primary] + aux_models.  Each replica
     computes argmax independently — no cross-GPU logits gather, no OOM.
     """
-    words = text.split()
-    if not words:
+    chars = list(text)
+    if not chars:
         return text
 
     mask_id = lm_vocab.stoi[MASK]
@@ -138,11 +130,11 @@ def _correct_with_bilstm(
 
         for pos in batch:
             left = max(0, pos - seq_len // 2)
-            right = min(len(words), left + seq_len)
+            right = min(len(chars), left + seq_len)
             left = max(0, right - seq_len)
 
-            window = words[left:right]
-            x = [lm_vocab.stoi.get(w, unk_id) for w in window]
+            window = chars[left:right]
+            x = [lm_vocab.stoi.get(c, unk_id) for c in window]
             local_pos = pos - left
 
             if 0 <= local_pos < len(x):
@@ -164,14 +156,14 @@ def _correct_with_bilstm(
         # argmax on the same GPU — only scalars cross to CPU, not the full logits
         for i, (local_pos, pos) in enumerate(zip(local_pos_list, pos_list)):
             pred_id = int(logits[i, local_pos].argmax().item())
-            pred_word = lm_vocab.itos[pred_id]
-            if not pred_word.startswith("<"):
-                words[pos] = pred_word
+            pred_char = lm_vocab.itos[pred_id]
+            if not pred_char.startswith("<"):
+                chars[pos] = pred_char
 
         pbar.update(len(batch))
 
     pbar.close()
-    return " ".join(words)
+    return "".join(chars)
 
 
 @torch.no_grad()
@@ -180,19 +172,19 @@ def _correct_with_ssm(
     seq_len: int, device: str, batch_size: int = 256,
     aux_models: list | None = None,
 ) -> str:
-    """Correct low-confidence words using the SSM language model.
+    """Correct low-confidence chars using the SSM language model.
 
     Uses a capped sliding-window context (last `seq_len` tokens before `pos`)
     so every sequence in the batch has the same bounded length, avoiding the
     O(N) padding blow-up that made early positions tiny and late positions huge.
     """
-    words = text.split()
-    if len(words) < 2:
+    chars = list(text)
+    if len(chars) < 2:
         return text
 
     unk_id = lm_vocab.stoi.get("<unk>", 0)
     mask_id = lm_vocab.stoi.get(MASK, 0)
-    ids = [lm_vocab.stoi.get(w, unk_id) for w in words]
+    ids = [lm_vocab.stoi.get(c, unk_id) for c in chars]
 
     total = len(low_pos)
 
@@ -239,17 +231,17 @@ def _correct_with_ssm(
         logits = curr_model(x)                                           # (B, seq_len, vocab)
 
         for i, pos_val in enumerate(valid_pos):
-            # Prediction for the next word comes from the last real context position
+            # Prediction for the next char comes from the last real context position
             last_idx = seq_len - 1  # always the rightmost token after left-padding
             pred_id = int(logits[i, last_idx].argmax().item())
-            pred_word = lm_vocab.itos[pred_id]
-            if not pred_word.startswith("<"):
-                words[pos_val] = pred_word
+            pred_char = lm_vocab.itos[pred_id]
+            if not pred_char.startswith("<"):
+                chars[pos_val] = pred_char
 
         pbar.update(len(batch))
 
     pbar.close()
-    return " ".join(words)
+    return "".join(chars)
 
 
 def _compute_metrics(pred: str, target: str) -> dict[str, float]:
@@ -260,6 +252,7 @@ def _compute_metrics(pred: str, target: str) -> dict[str, float]:
         "levenshtein": float(levenshtein_distance(pred, target)),
         "bleu": corpus_bleu(pred, target),
         "rouge_l": rouge_l_f1(pred, target),
+        "chrf": chrf_score(pred, target),
     }
 
 
@@ -284,9 +277,9 @@ def main(config_path: str, mode: str) -> None:
     cipher_vocab = build_vocab(cipher_clean)
     char_vocab = build_vocab(chars)
 
-    # Build language model vocabulary like Task 2: word-level with spaces restored
-    plain_words = plain.replace('\x00', ' ').split()
-    lm_vocab = build_vocab(plain_words, add_mask=True)
+    # Build language model vocabulary like Task 2: char-level with spaces restored
+    plain_chars = list(plain.replace('\x00', ' '))
+    lm_vocab = build_vocab(plain_chars, add_mask=True)
 
     dec_model = DecryptionModel(
         input_vocab_size=len(cipher_vocab.itos),
@@ -382,7 +375,7 @@ def main(config_path: str, mode: str) -> None:
             dec_model, cipher_noisy, cipher_vocab, char_vocab,
             seq_len=seq_len, device=device, batch_size=batch_size
         )
-        low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
+        low_pos = _find_low_conf_char_positions(pred_raw, conf, conf_threshold)
 
         if lm_type == "bilstm":
             pred_corrected = _correct_with_bilstm(
@@ -409,11 +402,13 @@ def main(config_path: str, mode: str) -> None:
                 f"baseline_levenshtein={m_raw['levenshtein']:.0f}",
                 f"baseline_bleu={m_raw['bleu']:.6f}",
                 f"baseline_rouge_l={m_raw['rouge_l']:.6f}",
+                f"baseline_chrf={m_raw['chrf']:.6f}",
                 f"corrected_char_accuracy={m_corr['char_accuracy']:.6f}",
                 f"corrected_word_accuracy={m_corr['word_accuracy']:.6f}",
                 f"corrected_levenshtein={m_corr['levenshtein']:.0f}",
                 f"corrected_bleu={m_corr['bleu']:.6f}",
                 f"corrected_rouge_l={m_corr['rouge_l']:.6f}",
+                f"corrected_chrf={m_corr['chrf']:.6f}",
             ]
         )
 
@@ -425,15 +420,18 @@ def main(config_path: str, mode: str) -> None:
                 f"{noise_level}/baseline/levenshtein": m_raw["levenshtein"],
                 f"{noise_level}/baseline/bleu": m_raw["bleu"],
                 f"{noise_level}/baseline/rouge_l": m_raw["rouge_l"],
+                f"{noise_level}/baseline/chrf": m_raw["chrf"],
                 f"{noise_level}/corrected/char_accuracy": m_corr["char_accuracy"],
                 f"{noise_level}/corrected/word_accuracy": m_corr["word_accuracy"],
                 f"{noise_level}/corrected/levenshtein": m_corr["levenshtein"],
                 f"{noise_level}/corrected/bleu": m_corr["bleu"],
                 f"{noise_level}/corrected/rouge_l": m_corr["rouge_l"],
+                f"{noise_level}/corrected/chrf": m_corr["chrf"],
                 f"{noise_level}/improvement/char_accuracy": m_corr["char_accuracy"] - m_raw["char_accuracy"],
                 f"{noise_level}/improvement/word_accuracy": m_corr["word_accuracy"] - m_raw["word_accuracy"],
                 f"{noise_level}/improvement/bleu": m_corr["bleu"] - m_raw["bleu"],
                 f"{noise_level}/improvement/rouge_l": m_corr["rouge_l"] - m_raw["rouge_l"],
+                f"{noise_level}/improvement/chrf": m_corr["chrf"] - m_raw["chrf"],
             })
 
     output_file = config["output"].get("result_file", f"task3_{lm_type}.txt")
@@ -453,7 +451,7 @@ def main(config_path: str, mode: str) -> None:
             dec_model, cipher_custom, cipher_vocab, char_vocab,
             seq_len=seq_len, device=device, batch_size=batch_size
         )
-        low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
+        low_pos = _find_low_conf_char_positions(pred_raw, conf, conf_threshold)
         if lm_type == "bilstm":
             pred_custom = _correct_with_bilstm(
                 pred_raw, low_pos, lm_model, lm_vocab,

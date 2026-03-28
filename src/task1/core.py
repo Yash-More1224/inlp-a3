@@ -151,10 +151,21 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         hidden_size=int(config["model"]["hidden_size"]),
         dropout=float(config["model"]["dropout"]),
         cell_type=cell_type,
+        num_layers=int(config["model"].get("num_layers", 1)),
     ).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"]["learning_rate"]))
     criterion = nn.CrossEntropyLoss()
+
+    # Optional cosine annealing LR scheduler
+    lr_scheduler_type = config["training"].get("lr_scheduler", None)
+    scheduler = None
+    if lr_scheduler_type == "cosine":
+        lr_min = float(config["training"].get("lr_min", 1e-6))
+        epochs_total = int(config["training"]["epochs"])
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=epochs_total, eta_min=lr_min
+        )
 
     ckpt_path = config["output"]["checkpoint_path"]
     ckpt_path = ckpt_path.format(model=cell_type)
@@ -191,7 +202,8 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
             print(f"Epoch {epoch:3d}/{epochs} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}", end="")
 
             if use_wandb:
-                log_wandb({"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch}, step=epoch)
+                current_lr = optimizer.param_groups[0]["lr"]
+                log_wandb({"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch, "lr": current_lr}, step=epoch)
 
             if val_loss < best_val:
                 best_val = val_loss
@@ -202,6 +214,9 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
                 print(" ✓ (checkpoint saved)")
             else:
                 print()
+
+            if scheduler is not None:
+                scheduler.step()
 
         print(f"\n{'='*60}")
         print(f"Training Complete!")

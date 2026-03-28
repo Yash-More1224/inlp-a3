@@ -59,28 +59,28 @@ def _build_word_chunks(word_ids: list[int], seq_len: int, step: int | None = Non
 def _prepare_task2_data(config: dict, output_dirs: dict):
     cache_path = _get_data_cache_path(output_dirs)
     cached_data = _load_data_cache(cache_path)
-    
+
     if cached_data is not None:
         # Verify the cached data matches current config
-        if (cached_data['seq_len'] == int(config["data"]["seq_len"]) and
+        if (cached_data.get('level') == 'char' and
+            cached_data['seq_len'] == int(config["data"]["seq_len"]) and
             cached_data['step'] == int(config["data"].get("step", config["data"]["seq_len"])) and
             cached_data['train_ratio'] == config["data"]["train_ratio"] and
             cached_data['val_ratio'] == config["data"]["val_ratio"]):
-            return (cached_data['train_chunks'], cached_data['val_chunks'], 
+            return (cached_data['train_chunks'], cached_data['val_chunks'],
                    cached_data['test_chunks'], cached_data['vocab'])
-    
-    # Process data if not cached or cache is invalid
-    print("Processing data...")
+
+    # --- Character-level data preparation ---
+    print("Processing data at character level...")
     plain = read_plain_text(config["data"]["data_dir"])
-    # Convert null characters (space placeholder) back to actual spaces for word splitting
-    plain = plain.replace('\x00', ' ')
-    words = plain.split()
-    vocab = build_vocab(words, add_mask=True)
-    word_ids = vocab.encode(words)
+    # Replace null-byte space placeholder with actual space
+    chars = list(plain.replace('\x00', ' '))
+    vocab = build_vocab(chars, add_mask=True)
+    char_ids = vocab.encode(chars)
 
     seq_len = int(config["data"]["seq_len"])
     step = int(config["data"].get("step", seq_len))
-    chunks = _build_word_chunks(word_ids, seq_len=seq_len, step=step)
+    chunks = _build_word_chunks(char_ids, seq_len=seq_len, step=step)
 
     train_idx, val_idx, test_idx = split_indices(len(chunks), config["data"]["train_ratio"], config["data"]["val_ratio"])
 
@@ -90,9 +90,10 @@ def _prepare_task2_data(config: dict, output_dirs: dict):
     train_chunks = _pick(train_idx)
     val_chunks = _pick(val_idx)
     test_chunks = _pick(test_idx)
-    
-    # Cache the processed data
+
+    # Cache the processed data (include 'level' key for cache invalidation)
     cache_data = {
+        'level': 'char',
         'train_chunks': train_chunks,
         'val_chunks': val_chunks,
         'test_chunks': test_chunks,
@@ -103,7 +104,7 @@ def _prepare_task2_data(config: dict, output_dirs: dict):
         'val_ratio': config["data"]["val_ratio"]
     }
     _save_data_cache(cache_path, cache_data)
-    
+
     return train_chunks, val_chunks, test_chunks, vocab
 
 
@@ -226,9 +227,16 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     optimizer = torch.optim.Adam(
-        model.parameters(), 
+        model.parameters(),
         lr=float(config["training"]["learning_rate"]),
         weight_decay=float(config["training"].get("weight_decay", 0.0))
+    )
+
+    # Optional cosine annealing scheduler
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=int(config["training"]["epochs"]),
+        eta_min=float(config["training"].get("lr_min", 1e-6)),
     )
 
     ckpt_path = config["output"]["checkpoint_path"]
@@ -263,7 +271,8 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
             print(f"Epoch {epoch:3d}/{epochs} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}", end="")
 
             if use_wandb:
-                log_wandb({"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch}, step=epoch)
+                current_lr = optimizer.param_groups[0]["lr"]
+                log_wandb({"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch, "lr": current_lr}, step=epoch)
 
             if val_loss < best_val:
                 best_val = val_loss
@@ -274,11 +283,13 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
             else:
                 patience_counter += 1
                 print(f" | Patience: {patience_counter}/{patience}")
-                
+
                 # Early stopping
                 if patience_counter >= patience:
                     print(f"\nEarly stopping triggered after {epoch} epochs (no improvement for {patience} epochs)")
                     break
+
+            scheduler.step()
 
         print(f"\n{'='*60}")
         print(f"Training Complete!")

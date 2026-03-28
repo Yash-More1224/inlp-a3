@@ -63,16 +63,31 @@ class CustomRNNLayer(nn.Module):
 
 
 class DecryptionModel(nn.Module):
-    def __init__(self, input_vocab_size: int, output_vocab_size: int, embedding_dim: int, hidden_size: int, dropout: float, cell_type: str):
+    def __init__(self, input_vocab_size: int, output_vocab_size: int, embedding_dim: int, hidden_size: int, dropout: float, cell_type: str, num_layers: int = 1):
         super().__init__()
         self.embedding = nn.Embedding(input_vocab_size, embedding_dim)
-        self.rnn = CustomRNNLayer(embedding_dim, hidden_size, cell_type=cell_type)
+        self.num_layers = num_layers
+
+        # First layer: embedding_dim -> hidden_size
+        self.rnn_layers = nn.ModuleList()
+        self.rnn_layers.append(CustomRNNLayer(embedding_dim, hidden_size, cell_type=cell_type))
+
+        # Additional stacked layers: hidden_size -> hidden_size
+        for _ in range(1, num_layers):
+            self.rnn_layers.append(CustomRNNLayer(hidden_size, hidden_size, cell_type=cell_type))
+
         self.dropout = nn.Dropout(dropout)
         self.head = nn.Linear(hidden_size, output_vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        emb = self.embedding(x)
-        out, _ = self.rnn(emb)
+        emb = self.embedding(x)           # (B, T, embedding_dim)
+        out, _ = self.rnn_layers[0](emb)  # (B, T, hidden_size)
+
+        for layer in self.rnn_layers[1:]:
+            residual = out
+            out, _ = layer(out)           # (B, T, hidden_size)
+            out = out + residual          # residual connection between stacked layers
+
         out = self.dropout(out)
         return self.head(out)
 

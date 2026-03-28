@@ -1,22 +1,23 @@
 model:
-  embedding_dim: 128
-  hidden_size: 192
-  dropout: 0.3
+  embedding_dim: 64      # chars need far smaller embeddings than words
+  hidden_size: 512       # larger hidden for capturing char-level patterns
+  dropout: 0.2
 
 training:
   seed: 42
   device: cuda
-  epochs: 20
-  batch_size: 32
-  learning_rate: 0.0005
-  weight_decay: 1e-4
-  patience: 5
+  epochs: 50
+  batch_size: 256        # larger batches OK since vocab is now tiny (~80)
+  learning_rate: 0.001
+  lr_min: 1.0e-6         # CosineAnnealingLR floor
+  weight_decay: 1.0e-4
+  patience: 10           # more patience for char-level convergence
 
 data:
   data_dir: data
-  seq_len: 64
-  step: 16
-  mask_prob: 0.15
+  seq_len: 256           # 256 chars ≈ 40-50 word context window
+  step: 32
+  mask_prob: 0.15        # same MLM masking rate
   train_ratio: 0.8
   val_ratio: 0.1
 

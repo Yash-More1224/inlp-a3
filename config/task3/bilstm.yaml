@@ -1,7 +1,7 @@
 seed: 42
 device: cuda
 batch_size: 256
-confidence_threshold: 0.60
+confidence_threshold: 0.30
 
 input_file: null
 output_text_file: null
