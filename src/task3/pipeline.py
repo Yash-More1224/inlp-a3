@@ -44,7 +44,13 @@ def _decrypt_text(
     confs: list[float] = []
 
     # Process chunks in large GPU batches
-    for b_start in range(0, len(chunks), batch_size):
+    for b_start in tqdm(
+        range(0, len(chunks), batch_size),
+        desc="Decryption",
+        leave=False,
+        dynamic_ncols=False,
+        bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n_fmt}/{total_fmt} batches [{elapsed}<{remaining}]"
+    ):
         batch_chunks = chunks[b_start : b_start + batch_size]
         # Pad to the longest chunk in this mini-batch
         max_len = max(len(c) for c in batch_chunks)
