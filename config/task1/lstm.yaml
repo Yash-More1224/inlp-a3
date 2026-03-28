@@ -8,6 +8,7 @@ training:
   seed: 42
   device: cuda
   epochs: 100            # more training budget
+  resume: true
   batch_size: 128        # larger for GPU efficiency
   learning_rate: 0.001
   lr_scheduler: cosine   # cosine annealing LR schedule

@@ -255,16 +255,29 @@ def run_task2(config_path: str, mode: str, model_type: str) -> None:
     if mode in {"train", "both"}:
         best_val = float("inf")
         best_epoch = -1
+        start_epoch = 1
         epochs = int(config["training"]["epochs"])
         patience = int(config["training"].get("patience", epochs))  # Early stopping patience
         patience_counter = 0
 
+        # Check if user wants to resume training from an existing checkpoint
+        if config["training"].get("resume", False) and os.path.exists(ckpt_path):
+            print(f"Resuming training from checkpoint: {ckpt_path}...")
+            ckpt = load_checkpoint(ckpt_path, model, optimizer, device)
+            start_epoch = ckpt["epoch"] + 1
+            best_val = ckpt["loss"]
+            best_epoch = ckpt["epoch"]
+            # Fast-forward the learning rate scheduler if present
+            if 'scheduler' in locals() and scheduler is not None:
+                for _ in range(start_epoch - 1):
+                    scheduler.step()
+
         print(f"\n{'='*60}")
         print(f"Starting Training on {model_type.upper()} - Device: {device}")
-        print(f"Total Epochs: {epochs} | Batch Size: {batch_size} | Patience: {patience}")
+        print(f"Epochs: {start_epoch} to {epochs} | Batch Size: {batch_size} | Patience: {patience}")
         print(f"{'='*60}\n")
 
-        for epoch in tqdm(range(1, epochs + 1), desc="Training Epochs", unit="epoch"):
+        for epoch in tqdm(range(start_epoch, epochs + 1), desc="Training Epochs", unit="epoch"):
             train_loss = run_epoch(model, train_loader, criterion, optimizer, device)
             val_loss = run_epoch(model, val_loader, criterion, optimizer=None, device=device)
 

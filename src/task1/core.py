@@ -189,14 +189,27 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
     if mode in {"train", "both"}:
         best_val = float("inf")
         best_epoch = -1
+        start_epoch = 1
         epochs = int(config["training"]["epochs"])
+
+        # Check if user wants to resume training from an existing checkpoint
+        if config["training"].get("resume", False) and os.path.exists(ckpt_path):
+            print(f"Resuming training from checkpoint: {ckpt_path}...")
+            ckpt = load_checkpoint(ckpt_path, model, optimizer, device)
+            start_epoch = ckpt["epoch"] + 1
+            best_val = ckpt["loss"]
+            best_epoch = ckpt["epoch"]
+            # Fast-forward the learning rate scheduler if present
+            if scheduler is not None:
+                for _ in range(start_epoch - 1):
+                    scheduler.step()
 
         print(f"\n{'='*60}")
         print(f"Starting Training on {cell_type.upper()} - Device: {device}")
-        print(f"Total Epochs: {epochs} | Batch Size: {batch_size}")
+        print(f"Epochs: {start_epoch} to {epochs} | Batch Size: {batch_size}")
         print(f"{'='*60}\n")
 
-        for epoch in range(1, epochs + 1):
+        for epoch in range(start_epoch, epochs + 1):
             train_loss = _run_epoch(model, train_loader, criterion, optimizer, device)
             val_loss = _run_epoch(model, val_loader, criterion, optimizer=None, device=device)
 
