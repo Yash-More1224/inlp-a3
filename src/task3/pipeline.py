@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import pickle
 from pathlib import Path
 
 import torch
@@ -16,89 +13,6 @@ from src.common.models import CustomBiLSTM, DecryptionModel, SimpleSSM
 from src.common.seed import set_seed
 from src.utils.checkpoints import load_checkpoint
 from src.utils.hf_wandb import finish_wandb, init_wandb, log_wandb, pull_from_hub
-
-
-def _get_cache_dir(output_dirs: dict) -> Path:
-    """Get cache directory for task3."""
-    cache_dir = Path(output_dirs["logs"]) / "task3_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
-
-
-def _compute_file_hash(filepath: str) -> str:
-    """Compute hash of a file to detect changes."""
-    sha256 = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            sha256.update(chunk)
-    return sha256.hexdigest()
-
-
-def _get_cache_metadata(
-    cipher_file: str,
-    dec_ckpt: str,
-    lm_ckpt: str,
-    conf_threshold: float,
-    lm_type: str
-) -> dict:
-    """Generate metadata to validate cache."""
-    return {
-        "cipher_hash": _compute_file_hash(cipher_file),
-        "dec_ckpt_hash": _compute_file_hash(dec_ckpt),
-        "lm_ckpt_hash": _compute_file_hash(lm_ckpt),
-        "conf_threshold": conf_threshold,
-        "lm_type": lm_type,
-    }
-
-
-def _get_cache_path(cache_dir: Path, filename: str, lm_type: str) -> tuple[Path, Path]:
-    """Get cache file paths (data and metadata)."""
-    cache_name = f"task3_{lm_type}_{Path(filename).stem}"
-    cache_data = cache_dir / f"{cache_name}_data.pkl"
-    cache_meta = cache_dir / f"{cache_name}_meta.json"
-    return cache_data, cache_meta
-
-
-def _load_cache(
-    cache_data: Path,
-    cache_meta: Path,
-    expected_metadata: dict
-) -> dict | None:
-    """Load cache if metadata matches."""
-    if not cache_data.exists() or not cache_meta.exists():
-        return None
-    
-    try:
-        with open(cache_meta, "r") as f:
-            stored_metadata = json.load(f)
-        
-        # Validate metadata matches
-        if stored_metadata != expected_metadata:
-            # Cache invalidated - check which field changed
-            for key in expected_metadata:
-                if key not in stored_metadata:
-                    return None
-                if stored_metadata[key] != expected_metadata[key]:
-                    return None
-            return None
-        
-        with open(cache_data, "rb") as f:
-            cache = pickle.load(f)
-        
-        return cache
-    except Exception as e:
-        return None  # Silently fail if cache load fails
-
-
-def _save_cache(cache_data: Path, cache_meta: Path, cache: dict, metadata: dict) -> None:
-    """Save cache to disk."""
-    try:
-        with open(cache_data, "wb") as f:
-            pickle.dump(cache, f)
-        with open(cache_meta, "w") as f:
-            json.dump(metadata, f)
-    except Exception:
-        pass  # Silently fail if cache write fails
 
 
 def _resolve_checkpoint(hf_cfg: dict, local_path: str, filename: str) -> str:
@@ -360,9 +274,6 @@ def main(config_path: str, mode: str) -> None:
 
     sections = [f"pipeline=task3_{lm_type}", f"mode={mode}"]
 
-    # Setup caching
-    cache_dir = _get_cache_dir(output_dirs)
-
     # WandB initialization
     use_wandb = bool(config.get("logging", {}).get("use_wandb", False))
     if use_wandb:
@@ -385,41 +296,17 @@ def main(config_path: str, mode: str) -> None:
 
     for filename in tqdm(noisy_files, desc="Processing Files"):
         data_dir = config["data"]["data_dir"]
-        cipher_path = str(Path(data_dir) / filename)
-        
-        # Read cipher tokens (suppress verbose output)
+        print(f"\n  Processing {filename}...")
+
         cipher_noisy = read_cipher_tokens(filename, data_dir, verbose=False)
-        
-        # Check cache before decryption
-        cache_data_path, cache_meta_path = _get_cache_path(cache_dir, filename, lm_type)
-        expected_metadata = _get_cache_metadata(cipher_path, dec_ckpt, lm_ckpt, conf_threshold, lm_type)
-        
-        cached = _load_cache(cache_data_path, cache_meta_path, expected_metadata)
-        
-        if cached:
-            print(f"  ✓ {filename}: loaded from cache")
-            pred_raw = cached["pred_raw"]
-            conf = cached["conf"]
-            low_pos = cached["low_pos"]
-            pred_corrected = cached["pred_corrected"]
+
+        pred_raw, conf = _decrypt_text(dec_model, cipher_noisy, cipher_vocab, char_vocab, seq_len=seq_len, device=device)
+        low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
+
+        if lm_type == "bilstm":
+            pred_corrected = _correct_with_bilstm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
         else:
-            pred_raw, conf = _decrypt_text(dec_model, cipher_noisy, cipher_vocab, char_vocab, seq_len=seq_len, device=device)
-            low_pos = _find_low_conf_word_positions(pred_raw, conf, conf_threshold)
-            
-            if lm_type == "bilstm":
-                pred_corrected = _correct_with_bilstm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
-            else:
-                pred_corrected = _correct_with_ssm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
-            
-            # Save to cache
-            cache_data = {
-                "pred_raw": pred_raw,
-                "conf": conf,
-                "low_pos": low_pos,
-                "pred_corrected": pred_corrected,
-            }
-            _save_cache(cache_data_path, cache_meta_path, cache_data, expected_metadata)
-            print(f"  ✓ {filename}: computed and cached")
+            pred_corrected = _correct_with_ssm(pred_raw, low_pos, lm_model, lm_vocab, seq_len=int(config["language_model"].get("seq_len", 32)), device=device)
 
         m_raw = _compute_metrics(pred_raw, plain)
         m_corr = _compute_metrics(pred_corrected, plain)
