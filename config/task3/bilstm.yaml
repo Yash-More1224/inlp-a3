@@ -38,10 +38,10 @@ decryption_model:
 
 language_model:
   type: bilstm
-  embedding_dim: 128
-  hidden_size: 192
+  embedding_dim: 64
+  hidden_size: 512
   dropout: 0.2
-  seq_len: 32
+  seq_len: 256
   checkpoint_path: outputs/logs/checkpoints/task2_bilstm.pt
   hf_filename: task2_bilstm.pt
   hf:
