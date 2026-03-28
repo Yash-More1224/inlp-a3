@@ -165,50 +165,62 @@ def _correct_with_bilstm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_
 
     mask_id = lm_vocab.stoi[MASK]
     unk_id = lm_vocab.stoi.get("<unk>", 0)
-    
-    # Batch corrections for faster processing
+
+    total = len(low_pos)
     batch_size = 32
-    batches = [low_pos[i:i+batch_size] for i in range(0, len(low_pos), batch_size)]
-    
-    for batch in tqdm(batches, desc="BiLSTM Correction", leave=False):
-        # Prepare batch of windows
+
+    # Single progress bar over all positions, updates only every 1000 to avoid log flooding
+    pbar = tqdm(
+        total=total,
+        desc="BiLSTM Correction",
+        leave=True,
+        miniters=1000,
+        mininterval=30.0,
+        dynamic_ncols=False,
+        bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n}/{total} [{elapsed}<{remaining}]",
+    )
+
+    for batch_start in range(0, total, batch_size):
+        batch = low_pos[batch_start : batch_start + batch_size]
+
         windows_list = []
         local_pos_list = []
         pos_list = []
-        
+
         for pos in batch:
             left = max(0, pos - seq_len // 2)
             right = min(len(words), left + seq_len)
             left = max(0, right - seq_len)
-            
+
             window = words[left:right]
             x = [lm_vocab.stoi.get(w, unk_id) for w in window]
             local_pos = pos - left
-            
+
             if 0 <= local_pos < len(x):
                 x[local_pos] = mask_id
                 windows_list.append(x)
                 local_pos_list.append(local_pos)
                 pos_list.append(pos)
-        
+
         if not windows_list:
+            pbar.update(len(batch))
             continue
-        
-        # Pad sequences to max length in batch
+
         max_len = max(len(w) for w in windows_list)
-        padded_windows = [w + [lm_vocab.stoi.get(MASK)] * (max_len - len(w)) for w in windows_list]
-        
-        # Run batch inference
+        padded_windows = [w + [lm_vocab.stoi.get(MASK, mask_id)] * (max_len - len(w)) for w in windows_list]
+
         xt = torch.tensor(padded_windows, dtype=torch.long, device=device)
         logits = lm_model(xt)
-        
-        # Extract predictions for each position
+
         for batch_idx, (local_pos, pos) in enumerate(zip(local_pos_list, pos_list)):
             pred_id = int(logits[batch_idx, local_pos].argmax().item())
             pred_word = lm_vocab.itos[pred_id]
             if not pred_word.startswith("<"):
                 words[pos] = pred_word
 
+        pbar.update(len(batch))
+
+    pbar.close()
     return " ".join(words)
 
 
@@ -219,48 +231,59 @@ def _correct_with_ssm(text: str, low_pos: list[int], lm_model, lm_vocab, seq_len
         return text
 
     unk_id = lm_vocab.stoi.get("<unk>", 0)
+    mask_id = lm_vocab.stoi.get(MASK, 0)
     ids = [lm_vocab.stoi.get(w, unk_id) for w in words]
-    
-    # Batch processing for SSM
+
+    total = len(low_pos)
     batch_size = 32
-    batches = [low_pos[i:i+batch_size] for i in range(0, len(low_pos), batch_size)]
-    
-    for batch in tqdm(batches, desc="SSM Correction", leave=False):
-        # Collect all contexts for this batch
+
+    # Single progress bar, updates only every 1000 positions to avoid log flooding
+    pbar = tqdm(
+        total=total,
+        desc="SSM Correction",
+        leave=True,
+        miniters=1000,
+        mininterval=30.0,
+        dynamic_ncols=False,
+        bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n}/{total} [{elapsed}<{remaining}]",
+    )
+
+    for batch_start in range(0, total, batch_size):
+        batch = low_pos[batch_start : batch_start + batch_size]
+
         contexts = []
         valid_pos = []
-        
+
         for pos in batch:
             if pos == 0 or pos - 1 >= len(ids):
                 continue
-            # SSM predicts next word from previous context
             context_ids = ids[:pos]
             if context_ids:
                 contexts.append(context_ids)
                 valid_pos.append(pos)
-        
+
         if not contexts:
+            pbar.update(len(batch))
             continue
-        
-        # Pad to max length in batch
+
         max_len = max(len(c) for c in contexts)
-        padded_contexts = [c + [lm_vocab.stoi.get(MASK)] * (max_len - len(c)) for c in contexts]
-        
-        # Batch inference
+        padded_contexts = [c + [mask_id] * (max_len - len(c)) for c in contexts]
+
         x = torch.tensor(padded_contexts, dtype=torch.long, device=device)
         logits = lm_model(x)
-        
-        # Extract predictions (SSM predicts at each position, we want the last valid one)
-        for batch_idx, pos in enumerate(zip(valid_pos)):
-            pos_val = pos[0]
-            # Get the logit for the position right after the context (for next-word prediction)
+
+        # Fix: iterate directly, not zip(valid_pos) which wraps each element in a tuple
+        for batch_idx, pos_val in enumerate(valid_pos):
             pred_pos_idx = len(contexts[batch_idx]) - 1
-            if pred_pos_idx >= 0 and pred_pos_idx < logits.size(1):
+            if 0 <= pred_pos_idx < logits.size(1):
                 pred_id = int(logits[batch_idx, pred_pos_idx].argmax().item())
                 pred_word = lm_vocab.itos[pred_id]
                 if not pred_word.startswith("<"):
                     words[pos_val] = pred_word
 
+        pbar.update(len(batch))
+
+    pbar.close()
     return " ".join(words)
 
 

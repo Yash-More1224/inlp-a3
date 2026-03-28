@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import difflib
 import math
 from collections import Counter
+
+import Levenshtein as _lev
 
 
 def character_accuracy(pred: str, target: str) -> float:
@@ -23,9 +26,8 @@ def word_accuracy(pred: str, target: str) -> float:
 
 
 def levenshtein_distance(a: str, b: str) -> int:
-    """Calculate Levenshtein distance between two strings using python-Levenshtein library."""
-    import Levenshtein
-    return Levenshtein.distance(a, b)
+    """Calculate Levenshtein distance between two strings using python-Levenshtein library (C extension)."""
+    return _lev.distance(a, b)
 
 
 def perplexity_from_loss(loss: float) -> float:
@@ -55,20 +57,17 @@ def corpus_bleu(pred: str, target: str, max_n: int = 4) -> float:
 
 
 def rouge_l_f1(pred: str, target: str) -> float:
+    """ROUGE-L F1 using difflib.SequenceMatcher (C-backed LCS), much faster than pure-Python DP."""
     p = pred.split()
     t = target.split()
     if not p or not t:
         return 0.0
 
-    dp = [[0] * (len(t) + 1) for _ in range(len(p) + 1)]
-    for i in range(1, len(p) + 1):
-        for j in range(1, len(t) + 1):
-            if p[i - 1] == t[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
-            else:
-                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    # SequenceMatcher uses Ratcliff/Obershelp matching which finds matching blocks
+    # equivalent to LCS for our purposes (no autojunk to keep it exact).
+    sm = difflib.SequenceMatcher(None, p, t, autojunk=False)
+    lcs = sum(block.size for block in sm.get_matching_blocks())
 
-    lcs = dp[-1][-1]
     precision = lcs / max(1, len(p))
     recall = lcs / max(1, len(t))
     if precision + recall == 0:
