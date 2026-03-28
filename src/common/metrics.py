@@ -23,9 +23,17 @@ def word_accuracy(pred: str, target: str) -> float:
     return correct / length
 
 
-def levenshtein_distance(a: str, b: str) -> int:
-    """Calculate Levenshtein distance between two strings using python-Levenshtein library (C extension)."""
-    return _lev.distance(a, b)
+def levenshtein_distance(a: str, b: str, chunk_size: int = 10000) -> int:
+    """Calculate Levenshtein distance in chunks to avoid O(N^2) bottlenecks on massive strings."""
+    total_dist = 0
+    max_len = max(len(a), len(b))
+    
+    for i in range(0, max_len, chunk_size):
+        a_chunk = a[i:i + chunk_size]
+        b_chunk = b[i:i + chunk_size]
+        total_dist += _lev.distance(a_chunk, b_chunk)
+        
+    return total_dist
 
 
 def perplexity_from_loss(loss: float) -> float:
