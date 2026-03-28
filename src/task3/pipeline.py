@@ -90,8 +90,15 @@ def _find_low_conf_word_positions(text: str, char_conf: list[float], threshold: 
 @torch.no_grad()
 def _correct_with_bilstm(
     text: str, low_pos: list[int], lm_model, lm_vocab,
-    seq_len: int, device: str, batch_size: int = 256
+    seq_len: int, device: str, batch_size: int = 256,
+    aux_models: list | None = None,
 ) -> str:
+    """Correct low-confidence words with BiLSTM.
+
+    aux_models: optional list of (model, device_str) for additional GPUs.
+    Batches are round-robined across [primary] + aux_models.  Each replica
+    computes argmax independently — no cross-GPU logits gather, no OOM.
+    """
     words = text.split()
     if not words:
         return text
@@ -100,9 +107,13 @@ def _correct_with_bilstm(
     unk_id = lm_vocab.stoi.get("<unk>", 0)
     total = len(low_pos)
 
+    # Build replica list: primary first, then any extras
+    replicas = [(lm_model, device)] + (aux_models or [])
+    n_replicas = len(replicas)
+
     pbar = tqdm(
         total=total,
-        desc="BiLSTM Correction",
+        desc=f"BiLSTM Correction ({n_replicas} GPU{'s' if n_replicas > 1 else ''})",
         leave=True,
         miniters=1000,
         mininterval=30.0,
@@ -110,7 +121,9 @@ def _correct_with_bilstm(
         bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n}/{total} [{elapsed}<{remaining}]",
     )
 
-    for b_start in range(0, total, batch_size):
+    for b_idx, b_start in enumerate(range(0, total, batch_size)):
+        # Round-robin across GPU replicas
+        curr_model, curr_device = replicas[b_idx % n_replicas]
         batch = low_pos[b_start : b_start + batch_size]
 
         windows_list: list[list[int]] = []
@@ -139,9 +152,10 @@ def _correct_with_bilstm(
         max_len = max(len(w) for w in windows_list)
         padded = [w + [mask_id] * (max_len - len(w)) for w in windows_list]
 
-        xt = torch.tensor(padded, dtype=torch.long, device=device)  # (B, T)
-        logits = lm_model(xt)                                        # (B, T, vocab)
+        xt = torch.tensor(padded, dtype=torch.long, device=curr_device)  # (B, T)
+        logits = curr_model(xt)                                           # (B, T, vocab)
 
+        # argmax on the same GPU — only scalars cross to CPU, not the full logits
         for i, (local_pos, pos) in enumerate(zip(local_pos_list, pos_list)):
             pred_id = int(logits[i, local_pos].argmax().item())
             pred_word = lm_vocab.itos[pred_id]
@@ -157,7 +171,8 @@ def _correct_with_bilstm(
 @torch.no_grad()
 def _correct_with_ssm(
     text: str, low_pos: list[int], lm_model, lm_vocab,
-    seq_len: int, device: str, batch_size: int = 256
+    seq_len: int, device: str, batch_size: int = 256,
+    aux_models: list | None = None,
 ) -> str:
     """Correct low-confidence words using the SSM language model.
 
@@ -175,9 +190,13 @@ def _correct_with_ssm(
 
     total = len(low_pos)
 
+    # Build replica list: primary first, then any extras
+    replicas = [(lm_model, device)] + (aux_models or [])
+    n_replicas = len(replicas)
+
     pbar = tqdm(
         total=total,
-        desc="SSM Correction",
+        desc=f"SSM Correction ({n_replicas} GPU{'s' if n_replicas > 1 else ''})",
         leave=True,
         miniters=1000,
         mininterval=30.0,
@@ -185,7 +204,8 @@ def _correct_with_ssm(
         bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n}/{total} [{elapsed}<{remaining}]",
     )
 
-    for b_start in range(0, total, batch_size):
+    for b_idx, b_start in enumerate(range(0, total, batch_size)):
+        curr_model, curr_device = replicas[b_idx % n_replicas]
         batch = low_pos[b_start : b_start + batch_size]
 
         contexts: list[list[int]] = []
@@ -209,8 +229,8 @@ def _correct_with_ssm(
         # what a causal model expects when context is shorter)
         padded = [[mask_id] * (seq_len - len(c)) + c for c in contexts]
 
-        x = torch.tensor(padded, dtype=torch.long, device=device)  # (B, seq_len)
-        logits = lm_model(x)                                        # (B, seq_len, vocab)
+        x = torch.tensor(padded, dtype=torch.long, device=curr_device)  # (B, seq_len)
+        logits = curr_model(x)                                           # (B, seq_len, vocab)
 
         for i, pos_val in enumerate(valid_pos):
             # Prediction for the next word comes from the last real context position
@@ -300,10 +320,23 @@ def main(config_path: str, mode: str) -> None:
     lm_ckpt = _resolve_checkpoint(config["language_model"].get("hf", {}), lm_local, lm_file)
     load_checkpoint(lm_ckpt, lm_model, optimizer=None, device=device)
 
-    # Now safe to wrap — DataParallel only affects forward() dispatch, not state.
+    # Manual multi-GPU: replicate LM weights to each additional GPU.
+    # We avoid DataParallel because it gathers the FULL logits tensor
+    # (batch × seq_len × vocab_size) on GPU 0, which OOMs for large vocabs.
+    # Instead, each GPU replica processes its own batches independently and
+    # only returns argmax indices (scalars) — zero cross-GPU tensor transfer.
+    lm_aux: list = []
     if num_gpus > 1:
-        dec_model = torch.nn.DataParallel(dec_model)
-        lm_model = torch.nn.DataParallel(lm_model)
+        import copy
+        primary_device = "cuda:0"
+        lm_model = lm_model.to(primary_device)
+        device = primary_device
+        for gpu_idx in range(1, num_gpus):
+            alt_dev = f"cuda:{gpu_idx}"
+            replica = copy.deepcopy(lm_model).to(alt_dev)
+            replica.eval()
+            lm_aux.append((replica, alt_dev))
+        print(f"✓ LM replicated to {num_gpus} GPUs: batches round-robined across cuda:0..cuda:{num_gpus - 1}")
 
     noisy_files = config["data"].get("noisy_files", ["cipher_01.txt", "cipher_02.txt", "cipher_03.txt", "cipher_04.txt"])
     seq_len = int(config["data"].get("seq_len", 128))
@@ -348,12 +381,14 @@ def main(config_path: str, mode: str) -> None:
         if lm_type == "bilstm":
             pred_corrected = _correct_with_bilstm(
                 pred_raw, low_pos, lm_model, lm_vocab,
-                seq_len=lm_seq_len, device=device, batch_size=batch_size
+                seq_len=lm_seq_len, device=device, batch_size=batch_size,
+                aux_models=lm_aux if lm_aux else None,
             )
         else:
             pred_corrected = _correct_with_ssm(
                 pred_raw, low_pos, lm_model, lm_vocab,
-                seq_len=lm_seq_len, device=device, batch_size=batch_size
+                seq_len=lm_seq_len, device=device, batch_size=batch_size,
+                aux_models=lm_aux if lm_aux else None,
             )
 
         m_raw = _compute_metrics(pred_raw, plain)
