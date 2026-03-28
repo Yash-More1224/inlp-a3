@@ -246,6 +246,10 @@ def main(config_path: str, mode: str) -> None:
     if device == "cuda" and not torch.cuda.is_available():
         device = "cpu"
 
+    num_gpus = torch.cuda.device_count() if device == "cuda" else 0
+    if num_gpus > 1:
+        print(f"✓ Found {num_gpus} GPUs — enabling DataParallel across all of them")
+
     plain = read_plain_text(config["data"]["data_dir"])
     cipher_clean = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"], verbose=False)
     chars = list(plain)[: len(cipher_clean)]
@@ -266,6 +270,8 @@ def main(config_path: str, mode: str) -> None:
         dropout=float(config["decryption_model"]["dropout"]),
         cell_type=config["decryption_model"]["cell_type"],
     ).to(device)
+    if num_gpus > 1:
+        dec_model = torch.nn.DataParallel(dec_model)
 
     lm_type = config["language_model"]["type"]
     if lm_type == "bilstm":
@@ -282,6 +288,8 @@ def main(config_path: str, mode: str) -> None:
             state_size=int(config["language_model"]["state_size"]),
             dropout=float(config["language_model"]["dropout"]),
         ).to(device)
+    if num_gpus > 1:
+        lm_model = torch.nn.DataParallel(lm_model)
 
     dec_local = config["decryption_model"]["checkpoint_path"]
     dec_file = config["decryption_model"].get("hf_filename", Path(dec_local).name)
