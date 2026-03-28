@@ -193,7 +193,7 @@ def run_task1(config_path: str, mode: str, cell_type: str) -> None:
         epochs = int(config["training"]["epochs"])
 
         # Check if user wants to resume training from an existing checkpoint
-        if config["training"].get("resume", False) and os.path.exists(ckpt_path):
+        if config["training"].get("resume", False) and Path(ckpt_path).exists():
             print(f"Resuming training from checkpoint: {ckpt_path}...")
             ckpt = load_checkpoint(ckpt_path, model, optimizer, device)
             start_epoch = ckpt["epoch"] + 1
