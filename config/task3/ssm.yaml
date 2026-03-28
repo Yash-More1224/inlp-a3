@@ -18,6 +18,11 @@ output:
   base_dir: outputs
   result_file: task3_ssm.txt
 
+logging:
+  use_wandb: true
+  project: inlp-assignment3
+  wandb_api_key: null
+
 decryption_model:
   cell_type: lstm
   embedding_dim: 256

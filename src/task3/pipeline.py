@@ -15,7 +15,7 @@ from src.common.metrics import character_accuracy, corpus_bleu, levenshtein_dist
 from src.common.models import CustomBiLSTM, DecryptionModel, SimpleSSM
 from src.common.seed import set_seed
 from src.utils.checkpoints import load_checkpoint
-from src.utils.hf_wandb import pull_from_hub
+from src.utils.hf_wandb import finish_wandb, init_wandb, log_wandb, pull_from_hub
 
 
 def _get_cache_dir(output_dirs: dict) -> Path:
@@ -363,6 +363,21 @@ def main(config_path: str, mode: str) -> None:
     # Setup caching
     cache_dir = _get_cache_dir(output_dirs)
 
+    # WandB initialization
+    use_wandb = bool(config.get("logging", {}).get("use_wandb", False))
+    if use_wandb:
+        try:
+            init_wandb(
+                project=config["logging"]["project"],
+                config=config,
+                name=f"task3_{lm_type}",
+            )
+            print("✓ WandB initialized successfully")
+        except Exception as e:
+            print(f"⚠️ WandB initialization failed: {e}")
+            print("Continuing without WandB logging...")
+            use_wandb = False
+
     print(f"\n{'='*60}")
     print(f"Starting Task 3 Evaluation with {lm_type.upper()} Language Model")
     print(f"Processing {len(noisy_files)} noisy cipher files")
@@ -426,11 +441,33 @@ def main(config_path: str, mode: str) -> None:
             ]
         )
 
+        if use_wandb:
+            noise_level = Path(filename).stem  # e.g. "cipher_01"
+            log_wandb({
+                f"{noise_level}/baseline/char_accuracy": m_raw["char_accuracy"],
+                f"{noise_level}/baseline/word_accuracy": m_raw["word_accuracy"],
+                f"{noise_level}/baseline/levenshtein": m_raw["levenshtein"],
+                f"{noise_level}/baseline/bleu": m_raw["bleu"],
+                f"{noise_level}/baseline/rouge_l": m_raw["rouge_l"],
+                f"{noise_level}/corrected/char_accuracy": m_corr["char_accuracy"],
+                f"{noise_level}/corrected/word_accuracy": m_corr["word_accuracy"],
+                f"{noise_level}/corrected/levenshtein": m_corr["levenshtein"],
+                f"{noise_level}/corrected/bleu": m_corr["bleu"],
+                f"{noise_level}/corrected/rouge_l": m_corr["rouge_l"],
+                f"{noise_level}/improvement/char_accuracy": m_corr["char_accuracy"] - m_raw["char_accuracy"],
+                f"{noise_level}/improvement/word_accuracy": m_corr["word_accuracy"] - m_raw["word_accuracy"],
+                f"{noise_level}/improvement/bleu": m_corr["bleu"] - m_raw["bleu"],
+                f"{noise_level}/improvement/rouge_l": m_corr["rouge_l"] - m_raw["rouge_l"],
+            })
+
     output_file = config["output"].get("result_file", f"task3_{lm_type}.txt")
     result_path = Path(output_dirs["results"]) / output_file
     print(f"\n✓ Writing results to {result_path}")
     write_text(str(result_path), "\n".join(sections))
     print(f"✓ Task 3 Evaluation Complete!\n")
+
+    if use_wandb:
+        finish_wandb()
 
     input_file = config.get("input_file")
     output_text_file = config.get("output_text_file")
