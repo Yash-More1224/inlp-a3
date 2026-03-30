@@ -333,6 +333,8 @@ def _correct_words_with_bilstm(
     replicas = [(lm_model, device)] + (aux_models or [])
     n_replicas = len(replicas)
     
+    pbar = tqdm(total=total, desc="    Word Correction", unit="words", ncols=80)
+    
     for b_idx, b_start in enumerate(range(0, total, batch_size)):
         curr_model, curr_device = replicas[b_idx % n_replicas]
         batch = low_conf_words[b_start : b_start + batch_size]
@@ -374,8 +376,10 @@ def _correct_words_with_bilstm(
             pred_word = lm_vocab.itos[pred_id]
             if not pred_word.startswith("<") and pred_word != words_corrected[word_pos]:
                 words_corrected[word_pos] = pred_word
+        
+        pbar.update(len(batch))
     
-    return " ".join(words_corrected)
+    pbar.close()
 
 
 def _compute_metrics(pred: str, target: str) -> dict[str, float]:
