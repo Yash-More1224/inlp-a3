@@ -456,11 +456,18 @@ def main(config_path: str, mode: str) -> None:
         plain_chars_full = plain_chars_full[:len(cipher_clean)]
     char_vocab = build_vocab(plain_chars_full)
 
-    # Build language model vocabulary at WORD level (for word-level BiLSTM)
-    # Split plain text by spaces to get words
-    plain_words = plain.replace('\x00', ' ').split()
-    lm_vocab = build_vocab(plain_words, add_mask=True)
-    print(f"  [LM Vocab] Word-level vocabulary: {len(lm_vocab.itos)} words")
+    # Build language model vocabulary - word-level for BiLSTM, char-level for SSM
+    lm_type = config["language_model"]["type"]
+    if lm_type == "bilstm":
+        # Word-level for BiLSTM
+        plain_words = plain.replace('\x00', ' ').split()
+        lm_vocab = build_vocab(plain_words, add_mask=True)
+        print(f"  [LM Vocab] Word-level vocabulary: {len(lm_vocab.itos)} words")
+    else:
+        # Character-level for SSM
+        plain_chars = list(plain.replace('\x00', ' '))
+        lm_vocab = build_vocab(plain_chars, add_mask=True)
+        print(f"  [LM Vocab] Character-level vocabulary: {len(lm_vocab.itos)} chars")
 
     dec_model = DecryptionModel(
         input_vocab_size=len(cipher_vocab.itos),
