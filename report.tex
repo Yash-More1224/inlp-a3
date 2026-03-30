@@ -1,0 +1,402 @@
+\documentclass[12pt]{article}
+
+% Page setup - 1 inch margins
+\usepackage[margin=1in]{geometry}
+
+% Font
+\usepackage{mathptmx} % Times New Roman equivalent
+\usepackage[T1]{fontenc}
+
+% Packages
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{url}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+}
+
+% Allow URLs to break at any character
+\def\UrlBreaks{\do\/\do-\do_\do.\do=\do?\do\&}
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+}
+
+\title{\textbf{INLP Assignment 3: Neural Sequence Models for Decryption and Language Modeling}}
+\author{Yash More}
+\date{March 2025}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report presents the implementation and evaluation of neural sequence models for three tasks: (1) decrypting a substitution cipher using RNN and LSTM, (2) language modeling with SSM for character-level next-character prediction and BiLSTM for word-level masked language modeling, and (3) using language models to correct decryption errors in noisy cipher text. We implement all models from scratch in PyTorch and evaluate their performance using character accuracy, word accuracy, perplexity, BLEU, and ROUGE scores.
+\end{abstract}
+
+\section{Introduction}
+
+The assignment involves building neural models to decrypt a cipher used to encrypt text. We are provided with:
+\begin{itemize}
+    \item \texttt{plain.txt}: Original English text
+    \item \texttt{cipher\_00.txt}: Encrypted version using a substitution cipher
+    \item \texttt{cipher\_01.txt} to \texttt{cipher\_04.txt}: Noisy encrypted versions
+\end{itemize}
+
+The cipher encoding uses a variable-length scheme: regular characters are encoded as 2-digit codes, while spaces are encoded as single digits. Our objective is to implement neural sequence models that can learn this mapping and recover the original message, even in the presence of noise.
+
+\section{Task 1: Decrypting the Cipher}
+
+\subsection{Methodology}
+
+We implemented two sequence-to-sequence models from scratch (without using \texttt{nn.RNN} or \texttt{nn.LSTM}):
+
+\textbf{1. Recurrent Neural Network (RNN):}
+\begin{itemize}
+    \item Embedding layer for cipher token representation
+    \item Custom RNN cell with hidden state update: $h_t = \tanh(W_{ih}x_t + W_{hh}h_{t-1} + b)$
+    \item Output projection to character vocabulary
+    \item Single-layer architecture
+\end{itemize}
+
+\textbf{2. Long Short-Term Memory (LSTM):}
+\begin{itemize}
+    \item Forget, input, and output gates with sigmoid activations
+    \item Cell state with candidate values using tanh
+    \item 2-layer stacked architecture for hierarchical feature extraction
+    \item Better gradient flow through gating mechanisms
+\end{itemize}
+
+\textbf{Architecture Justification:}
+\begin{itemize}
+    \item \textbf{Embedding dimension (256):} Sufficiently large to capture semantic relationships between cipher tokens without overfitting
+    \item \textbf{Hidden size (512):} Balances model capacity and computational efficiency
+    \item \textbf{2-layer LSTM:} Deeper network captures hierarchical patterns better than single-layer RNN
+    \item \textbf{Dropout (0.3 for LSTM, 0.2 for RNN):} Higher dropout for deeper LSTM prevents overfitting
+\end{itemize}
+
+\subsection{Training Configuration}
+
+\textbf{RNN Configuration:}
+\begin{itemize}
+    \item Embedding dimension: 256
+    \item Hidden size: 512
+    \item Dropout: 0.2
+    \item Sequence length: 128
+    \item Batch size: 64
+    \item Learning rate: 0.001
+    \item Epochs: 50
+\end{itemize}
+
+\textbf{LSTM Configuration:}
+\begin{itemize}
+    \item Embedding dimension: 256
+    \item Hidden size: 512
+    \item Number of layers: 2
+    \item Dropout: 0.3
+    \item Sequence length: 256 (longer context for better decryption)
+    \item Batch size: 128
+    \item Learning rate: 0.001 with cosine annealing (lr\_min=1e-5)
+    \item Epochs: 100 (more training budget for deeper model)
+\end{itemize}
+
+\subsection{Results}
+
+Table~\ref{tab:task1} presents the performance metrics for both models evaluated on the clean cipher (cipher\_00.txt).
+
+\begin{table}[h]
+\centering
+\caption{Task 1: Decryption Performance}
+\label{tab:task1}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Test Loss} & \textbf{Char Acc} & \textbf{Word Acc} & \textbf{Levenshtein} \\
+\midrule
+RNN & 1.680 & 0.523 & 0.225 & 269,268 \\
+LSTM & 1.229 & 0.640 & 0.429 & 203,325 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis}
+
+\textbf{Performance Comparison:}
+\begin{itemize}
+    \item \textbf{Character Accuracy:} LSTM achieves 64.0\% vs RNN's 52.3\% (11.7 percentage point improvement)
+    \item \textbf{Word Accuracy:} LSTM achieves 42.9\% vs RNN's 22.5\% (20.4 percentage point improvement)
+    \item \textbf{Levenshtein Distance:} LSTM has 24.4\% lower edit distance (65,943 fewer edits required)
+\end{itemize}
+
+\textbf{Key Observations:}
+\begin{itemize}
+    \item The LSTM's gating mechanisms effectively handle long-range dependencies in sequences
+    \item The vanishing gradient problem in vanilla RNNs limits its ability to learn long-term patterns
+    \item The 2-layer stacked LSTM architecture enables hierarchical feature extraction
+\end{itemize}
+
+\textbf{Strengths of LSTM over RNN:}
+\begin{itemize}
+    \item Forget gate allows selective memory retention
+    \item Input gate controls new information flow
+    \item Output gate regulates information exposure
+    \item Cell state provides a highway for gradient flow
+\end{itemize}
+
+\textbf{Limitations:}
+\begin{itemize}
+    \item LSTM requires more computation due to gating mechanisms
+    \item Both models struggle with achieving perfect decryption (>95\% accuracy)
+    \item Character-level modeling is inherently more challenging than word-level
+\end{itemize}
+
+\section{Task 2: Language Modeling}
+
+\subsection{Methodology}
+
+We implemented two language modeling approaches with different granularities:
+
+\textbf{1. State Space Model (SSM) for Next Word Prediction:}
+\begin{itemize}
+    \item Word-level tokenization
+    \item Linear state transition: $s_t = \tanh(s_{t-1}A + x_t B)$
+    \item Causal (left-to-right) prediction of next word
+    \item Fixed state size of 512 for $\sim$94K-word vocabulary
+\end{itemize}
+
+\textbf{2. Bidirectional LSTM (BiLSTM) for Masked Language Modeling:}
+\begin{itemize}
+    \item Forward and backward LSTM processing
+    \item Random masking of 15\% of tokens (MLM approach)
+    \item Prediction of masked positions only
+    \item Access to both left and right context for prediction
+\end{itemize}
+
+\textbf{Why Different Architectures:}
+\begin{itemize}
+    \item \textbf{SSM (word-level):} Causal left-to-right prediction suits next-word prediction
+    \item \textbf{BiLSTM (word-level):} Bidirectional context better for masked language modeling
+    \item Both use word vocabulary ($\sim$94K) for richer semantic modeling
+\end{itemize}
+
+\subsection{Training Configuration}
+
+\textbf{SSM Configuration (Word-Level):}
+\begin{itemize}
+    \item Embedding dimension: 256 (word vocabulary $\sim$94K words)
+    \item State size: 512
+    \item Sequence length: 256 words
+    \item Batch size: 256
+    \item Learning rate: 0.001 with cosine annealing
+\end{itemize}
+
+\textbf{BiLSTM Configuration (Word-Level):}
+\begin{itemize}
+    \item Embedding dimension: 128 (word vocabulary $\sim$94K words)
+    \item Hidden size: 192
+    \item Sequence length: 256 words
+    \item Batch size: 256
+    \item Learning rate: 0.001 with cosine annealing
+    \item Weight decay: 1e-4 (L2 regularization)
+    \item Patience: 10 epochs for early stopping
+    \item Train/Val/Test split: 80\%/10\%/10\%
+\end{itemize}
+
+\textbf{Hyperparameter Justifications:}
+\begin{itemize}
+    \item \textbf{Embedding dim (SSM 256 vs BiLSTM 128):} SSM needs larger embeddings for state-space transformations
+    \item \textbf{Sequence length (256):} Covers approximately 40-50 words of context
+    \item \textbf{Batch size (256):} Larger batches work well with small character vocabulary
+    \item \textbf{Weight decay (1e-4):} Prevents overfitting on the limited character set
+\end{itemize}
+
+\subsection{Results}
+
+Table~\ref{tab:task2} shows the perplexity scores for both models. Both models operate at word-level (vocabulary $\sim$94K).
+
+\begin{table}[h]
+\centering
+\caption{Task 2: Language Modeling Performance (Word-Level)}
+\label{tab:task2}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{Test Loss} & \textbf{Perplexity} \\
+\midrule
+SSM (Next Char) & 7.058 & 1161.61 \\
+BiLSTM (MLM) & 6.886 & 978.63 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis}
+
+\textbf{Performance Comparison:}
+\begin{itemize}
+    \item BiLSTM achieves 15.8\% lower perplexity than SSM
+    \item Both models show high perplexity, indicating character-level modeling difficulty
+\end{itemize}
+
+\textbf{Why BiLSTM Performs Better:}
+\begin{itemize}
+    \item Bidirectional context provides richer information for prediction
+    \item MLM training exposes the model to diverse masking patterns
+    \item SSM's purely causal nature limits context to left side only
+\end{itemize}
+
+\textbf{Why Perplexity Differs:}
+\begin{itemize}
+    \item \textbf{SSM:} Causal prediction among $\sim$94K words; higher perplexity indicates difficulty with sequential dependencies
+    \item \textbf{BiLSTM:} Bidirectional context among $\sim$94K words; lower perplexity reflects richer context access
+    \item Both models face challenges with the large word vocabulary
+\end{itemize}
+
+\textbf{Strengths of Each Approach:}
+\begin{itemize}
+    \item \textbf{SSM:} Simpler architecture, faster inference, causal for streaming applications
+    \item \textbf{BiLSTM:} Richer context, better for error correction with full context
+\end{itemize}
+
+\textbf{Limitations:}
+\begin{itemize}
+    \item High perplexity indicates both models struggle with character patterns
+    \item Limited context window (256 chars) may miss long-range dependencies
+    \item No pretraining or transfer learning used
+\end{itemize}
+
+\section{Task 3: Error Correction with Language Models}
+
+\subsection{Methodology}
+
+For this task, we combine the decryption model (LSTM from Task 1) with the language models (SSM or BiLSTM from Task 2) to correct errors introduced by noise in cipher\_01.txt through cipher\_04.txt.
+
+\textbf{Key Architectural Change:}
+\begin{itemize}
+    \item \textbf{BiLSTM variant:} Uses \textbf{word-level} language modeling (vocabulary $\sim$94K words)
+    \item \textbf{SSM variant:} Also uses \textbf{word-level} language modeling (vocabulary $\sim$94K words)
+\end{itemize}
+
+This dual approach leverages the strengths of each LM architecture: BiLSTM's richer bidirectional context works better at word-level, while SSM's causal nature suits character-level sequential prediction.
+
+\textbf{Pipeline:}
+\begin{enumerate}
+    \item Decrypt noisy cipher using trained decryption model (LSTM, num\_layers=1)
+    \item Identify low-confidence predictions (confidence $<$ 0.30 threshold)
+    \item Use language model to correct errors:
+    \begin{itemize}
+        \item \textbf{BiLSTM (Word-Level):} Aggregate character confidences to word-level, mask low-confidence words, predict replacements using bidirectional word context
+        \item \textbf{SSM (Word-Level):} Mask low-confidence words based on aggregated character confidences, predict using left-to-right word context
+    \end{itemize}
+\end{enumerate}
+
+\textbf{Why This Approach:}
+\begin{itemize}
+    \item Low-confidence predictions indicate noisy or OOV cipher tokens
+    \item Language models provide prior knowledge about valid sequences
+    \item Word-level correction (BiLSTM) leverages semantic coherence across words
+    \item Word-level correction (SSM) leverages sequential word patterns
+    \item Dual-granularity approach adapts to different error patterns
+\end{itemize}
+
+\subsection{Configuration}
+
+\textbf{Decryption Model (shared across variants):}
+\begin{itemize}
+    \item Architecture: LSTM with 1 layer (checkpoint from Task 1)
+    \item Embedding dimension: 256
+    \item Hidden size: 512
+    \item Dropout: 0.2
+    \item HF Repository: yashmore1224/inlp-final (task1\_lstm.pt)
+\end{itemize}
+
+\textbf{BiLSTM Language Model Configuration:}
+\begin{itemize}
+    \item Type: Word-level BiLSTM (vocabulary $\sim$94K)
+    \item Embedding dimension: 128
+    \item Hidden size: 192
+    \item Dropout: 0.2
+    \item Sequence length: 256
+    \item HF Repository: yashmore1224/inlp-final (task2\_bilstm.pt)
+\end{itemize}
+
+\textbf{SSM Language Model Configuration:}
+\begin{itemize}
+    \item Type: Character-level SSM (vocabulary $\sim$80)
+    \item Embedding dimension: 256
+    \item State size: 512
+    \item Dropout: 0.2
+    \item Sequence length: 256
+    \item HF Repository: yashmore1224/inlp-final (task2\_ssm.pt)
+\end{itemize}
+
+\textbf{Pipeline Settings:}
+\begin{itemize}
+    \item Batch size: 256
+    \item Confidence threshold: 0.30
+    \item Sequence length: 128 (data loading)
+    \item Seed: 42
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+
+We evaluate using:
+\begin{itemize}
+    \item Character and Word Accuracy
+    \item Levenshtein Distance
+    \item BLEU Score
+    \item ROUGE-L F1 Score
+    \item chrF Score
+\end{itemize}
+
+\subsection{Results}
+
+[Results to be added after Kaggle run completes]
+
+\subsection{Analysis}
+
+[Analysis to be added based on results]
+
+\textbf{Expected Challenges:}
+\begin{itemize}
+    \item Language models trained on clean text may struggle with garbled input
+    \item Low baseline decryption accuracy ($<$35\% char accuracy) leaves little signal to correct
+    \item Correction may amplify errors if language model predictions are wrong
+\end{itemize}
+
+\section{Conclusion}
+
+This assignment demonstrated the effectiveness of neural sequence models for:
+\begin{enumerate}
+    \item \textbf{Sequence Transduction:} LSTM significantly outperforms RNN for cipher decryption due to better handling of long-range dependencies.
+    \item \textbf{Language Modeling:} Bidirectional models (BiLSTM) achieve better perplexity than unidirectional models (SSM) for masked prediction tasks.
+    \item \textbf{Error Correction:} [To be completed after Task 3 results]
+\end{enumerate}
+
+\textbf{Key Takeaways:}
+\begin{itemize}
+    \item Model architecture selection should match task requirements (causal vs bidirectional)
+    \item Character-level modeling is inherently more challenging than word-level
+    \item Proper hyperparameter tuning (dropout, learning rate scheduling) significantly impacts performance
+\end{itemize}
+
+\section*{Links to Artifacts}
+
+\begin{itemize}
+    \item \textbf{HuggingFace Models:} \url{https://huggingface.co/yashmore1224/inlp-final/tree/main}
+    \item \textbf{WandB Logs:} \url{https://wandb.ai/yash-more1224-international-institute-of-information-tec/inlp-assignment3}
+\end{itemize}
+
+\end{document}
