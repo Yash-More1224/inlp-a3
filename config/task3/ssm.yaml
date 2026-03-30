@@ -33,13 +33,13 @@ decryption_model:
   checkpoint_path: outputs/logs/checkpoints/task1_lstm.pt
   hf_filename: task1_lstm.pt
   hf:
-    repo_id: "yashmore1224/inlp-a3-original"
+    repo_id: "yashmore1224/inlp-final"
     token: null
 
 language_model:
   type: ssm
-  embedding_dim: 64
-  state_size: 256
+  embedding_dim: 256
+  state_size: 512
   dropout: 0.2
   seq_len: 256
   checkpoint_path: outputs/logs/checkpoints/task2_ssm.pt

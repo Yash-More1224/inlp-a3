@@ -33,7 +33,7 @@ decryption_model:
   checkpoint_path: outputs/logs/checkpoints/task1_lstm.pt
   hf_filename: task1_lstm.pt
   hf:
-    repo_id: "yashmore1224/inlp-a3-original"
+    repo_id: "yashmore1224/inlp-final"
     token: null
 
 language_model:
