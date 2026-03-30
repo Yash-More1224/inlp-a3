@@ -36,7 +36,19 @@ def load_checkpoint(
         raise FileNotFoundError(f"No checkpoint found at {path}")
         
     checkpoint = torch.load(path, map_location=device, weights_only=True)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    state_dict = checkpoint["model_state_dict"]
+    
+    # Handle backward compatibility: old checkpoints use "rnn.cell.*", new models use "rnn_layers.0.cell.*"
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith("rnn.cell."):
+            # Map old key to new key
+            new_key = key.replace("rnn.cell.", "rnn_layers.0.cell.")
+            new_state_dict[new_key] = value
+        else:
+            new_state_dict[key] = value
+    
+    model.load_state_dict(new_state_dict, strict=False)
     
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
