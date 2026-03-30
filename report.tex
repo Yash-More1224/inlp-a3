@@ -46,12 +46,12 @@
 \maketitle
 
 \begin{abstract}
-This report presents the implementation and evaluation of neural sequence models for three tasks: (1) decrypting a substitution cipher using RNN and LSTM, (2) language modeling with SSM for character-level next-character prediction and BiLSTM for word-level masked language modeling, and (3) using language models to correct decryption errors in noisy cipher text. We implement all models from scratch in PyTorch and evaluate their performance using character accuracy, word accuracy, perplexity, BLEU, and ROUGE scores.
+This report presents the implementation and evaluation of neural sequence models for three tasks: (1) decrypting a substitution cipher using RNN and LSTM, (2) language modeling with SSM for word-level next-word prediction and BiLSTM for word-level masked language modeling, and (3) using language models to correct decryption errors in noisy cipher text. Task 3 evaluation could not be completed due to computational constraints. I implement all models from scratch in PyTorch and evaluate their performance using character accuracy, word accuracy, perplexity, BLEU, and ROUGE scores.
 \end{abstract}
 
 \section{Introduction}
 
-The assignment involves building neural models to decrypt a cipher used to encrypt text. We are provided with:
+The assignment involves building neural models to decrypt a cipher used to encrypt text. I am provided with:
 \begin{itemize}
     \item \texttt{plain.txt}: Original English text
     \item \texttt{cipher\_00.txt}: Encrypted version using a substitution cipher
@@ -64,7 +64,7 @@ The cipher encoding uses a variable-length scheme: regular characters are encode
 
 \subsection{Methodology}
 
-We implemented two sequence-to-sequence models from scratch (without using \texttt{nn.RNN} or \texttt{nn.LSTM}):
+I implemented two sequence-to-sequence models from scratch (without using \texttt{nn.RNN} or \texttt{nn.LSTM}):
 
 \textbf{1. Recurrent Neural Network (RNN):}
 \begin{itemize}
@@ -117,6 +117,13 @@ We implemented two sequence-to-sequence models from scratch (without using \text
 
 \subsection{Results}
 
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\textwidth]{outputs/plots/task1_comparison.png}
+\caption{Task 1: RNN vs LSTM Character Accuracy Comparison}
+\label{fig:task1}
+\end{figure}
+
 Table~\ref{tab:task1} presents the performance metrics for both models evaluated on the clean cipher (cipher\_00.txt).
 
 \begin{table}[h]
@@ -168,7 +175,7 @@ LSTM & 1.229 & 0.640 & 0.429 & 203,325 \\
 
 \subsection{Methodology}
 
-We implemented two language modeling approaches with different granularities:
+I implemented two language modeling approaches with different granularities:
 
 \textbf{1. State Space Model (SSM) for Next Word Prediction:}
 \begin{itemize}
@@ -226,6 +233,13 @@ We implemented two language modeling approaches with different granularities:
 
 \subsection{Results}
 
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\textwidth]{outputs/plots/task2_perplexity.png}
+\caption{Task 2: SSM vs BiLSTM Perplexity Comparison}
+\label{fig:task2}
+\end{figure}
+
 Table~\ref{tab:task2} shows the perplexity scores for both models. Both models operate at word-level (vocabulary $\sim$94K).
 
 \begin{table}[h]
@@ -236,7 +250,7 @@ Table~\ref{tab:task2} shows the perplexity scores for both models. Both models o
 \toprule
 \textbf{Model} & \textbf{Test Loss} & \textbf{Perplexity} \\
 \midrule
-SSM (Next Char) & 7.058 & 1161.61 \\
+SSM (Next Word) & 7.058 & 1161.61 \\
 BiLSTM (MLM) & 6.886 & 978.63 \\
 \bottomrule
 \end{tabular}
@@ -247,7 +261,7 @@ BiLSTM (MLM) & 6.886 & 978.63 \\
 \textbf{Performance Comparison:}
 \begin{itemize}
     \item BiLSTM achieves 15.8\% lower perplexity than SSM
-    \item Both models show high perplexity, indicating character-level modeling difficulty
+    \item Both models show high perplexity, indicating word-level modeling difficulty
 \end{itemize}
 
 \textbf{Why BiLSTM Performs Better:}
@@ -281,7 +295,7 @@ BiLSTM (MLM) & 6.886 & 978.63 \\
 
 \subsection{Methodology}
 
-For this task, we combine the decryption model (LSTM from Task 1) with the language models (SSM or BiLSTM from Task 2) to correct errors introduced by noise in cipher\_01.txt through cipher\_04.txt.
+For this task, I combine the decryption model (LSTM from Task 1) with the language models (SSM or BiLSTM from Task 2) to correct errors introduced by noise in cipher\_01.txt through cipher\_04.txt.
 
 \textbf{Key Architectural Change:}
 \begin{itemize}
@@ -334,7 +348,7 @@ This dual approach leverages the strengths of each LM architecture: BiLSTM's ric
 
 \textbf{SSM Language Model Configuration:}
 \begin{itemize}
-    \item Type: Character-level SSM (vocabulary $\sim$80)
+    \item Type: Word-level SSM (vocabulary $\sim$94K)
     \item Embedding dimension: 256
     \item State size: 512
     \item Dropout: 0.2
@@ -352,7 +366,7 @@ This dual approach leverages the strengths of each LM architecture: BiLSTM's ric
 
 \subsection{Evaluation Metrics}
 
-We evaluate using:
+I evaluate using:
 \begin{itemize}
     \item Character and Word Accuracy
     \item Levenshtein Distance

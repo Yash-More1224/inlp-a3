@@ -1,6 +1,6 @@
 model:
-  embedding_dim: 64      # chars need far smaller embeddings than words
-  hidden_size: 512       # larger hidden for capturing char-level patterns
+  embedding_dim: 128      # chars need far smaller embeddings than words
+  hidden_size: 192       # larger hidden for capturing char-level patterns
   dropout: 0.2
 
 training:
