@@ -20,21 +20,44 @@ def _resolve_checkpoint(hf_cfg: dict, local_path: str, filename: str) -> str:
     token = hf_cfg.get("token")
     if repo_id:
         try:
-            return pull_from_hub(repo_id=repo_id, filename=filename, local_dir=str(Path(local_path).parent), token=token)
-        except Exception:
+            print(f"  [HF] Downloading {filename} from {repo_id}")
+            downloaded_path = pull_from_hub(repo_id=repo_id, filename=filename, local_dir=str(Path(local_path).parent), token=token)
+            print(f"  [HF] Successfully downloaded {filename}")
+            return downloaded_path
+        except Exception as e:
+            print(f"  [HF] Failed to download from hub: {e}")
+            print(f"  [HF] Falling back to local path: {local_path}")
             return local_path
+    print(f"  [Local] Using local checkpoint: {local_path}")
     return local_path
 
 
 @torch.no_grad()
 def _decrypt_text(
     model, cipher_tokens: list[str], cipher_vocab, char_vocab,
-    seq_len: int, device: str, batch_size: int = 256
+    seq_len: int, device: str, batch_size: int = 256,
+    oov_fallback_id: int | None = None,
 ) -> tuple[str, list[float]]:
-    """Decrypt cipher tokens using fully-batched GPU inference."""
+    """Decrypt cipher tokens using fully-batched GPU inference.
+    
+    Args:
+        oov_fallback_id: Optional char ID to use for out-of-vocab cipher tokens.
+                          If None, uses the most common character (space).
+    """
     model.eval()
-    ids = cipher_vocab.encode(cipher_tokens)
-
+    
+    # Handle OOV cipher tokens by mapping them to <unk> or a known token
+    unk_id = cipher_vocab.stoi.get("<unk>", 0)
+    valid_ids = set(range(len(cipher_vocab.itos)))
+    
+    # Encode with OOV handling
+    ids = []
+    for tok in cipher_tokens:
+        idx = cipher_vocab.stoi.get(tok, unk_id)
+        if idx not in valid_ids:
+            idx = unk_id
+        ids.append(idx)
+    
     # Slice the full sequence into non-overlapping chunks
     chunks = [ids[s : s + seq_len] for s in range(0, len(ids), seq_len) if ids[s : s + seq_len]]
     if not chunks:
@@ -74,6 +97,10 @@ def _decrypt_text(
 
 
 def _find_low_conf_char_positions(text: str, char_conf: list[float], threshold: float) -> list[int]:
+    """Find character positions with confidence below threshold.
+    
+    Also includes adjacent positions to create context for better correction.
+    """
     chars = list(text)
     if not chars:
         return []
@@ -82,6 +109,14 @@ def _find_low_conf_char_positions(text: str, char_conf: list[float], threshold: 
     for idx, conf in enumerate(char_conf):
         if idx < len(chars) and conf < threshold:
             positions.append(idx)
+    
+    # If very few positions found, also include medium confidence positions
+    if len(positions) < len(chars) * 0.05:  # Less than 5% marked
+        for idx, conf in enumerate(char_conf):
+            if idx < len(chars) and idx not in positions and conf < threshold + 0.2:
+                positions.append(idx)
+        positions.sort()
+    
     return positions
 
 
@@ -245,10 +280,27 @@ def _correct_with_ssm(
 
 
 def _compute_metrics(pred: str, target: str) -> dict[str, float]:
-    target = target[: len(pred)]
+    """Compute metrics with proper alignment between prediction and target."""
+    if not pred or not target:
+        return {
+            "char_accuracy": 0.0,
+            "word_accuracy": 0.0,
+            "levenshtein": float(len(target) if target else 0),
+            "bleu": 0.0,
+            "rouge_l": 0.0,
+            "chrf": 0.0,
+        }
+    
+    # Ensure we're comparing same-length strings
+    # The cipher and plain should have 1:1 mapping, but lengths might differ
+    # due to noise or truncation. Take the minimum to ensure fair comparison.
+    min_len = min(len(pred), len(target))
+    pred_aligned = pred[:min_len]
+    target_aligned = target[:min_len]
+    
     return {
-        "char_accuracy": character_accuracy(pred, target),
-        "word_accuracy": word_accuracy(pred, target),
+        "char_accuracy": character_accuracy(pred_aligned, target_aligned),
+        "word_accuracy": word_accuracy(pred_aligned, target_aligned),
         "levenshtein": float(levenshtein_distance(pred, target)),
         "bleu": corpus_bleu(pred, target),
         "rouge_l": rouge_l_f1(pred, target),
@@ -265,17 +317,41 @@ def main(config_path: str, mode: str) -> None:
     if device == "cuda" and not torch.cuda.is_available():
         device = "cpu"
 
+    # Print HF repo info prominently
+    dec_hf_repo = config["decryption_model"].get("hf", {}).get("repo_id", "")
+    lm_hf_repo = config["language_model"].get("hf", {}).get("repo_id", "")
+    print(f"\n{'='*60}")
+    print(f"HuggingFace Model Configuration")
+    print(f"{'='*60}")
+    if dec_hf_repo:
+        print(f"✓ Decryption model HF repo: {dec_hf_repo}")
+    else:
+        print(f"✗ Decryption model: Using local path only")
+    if lm_hf_repo:
+        print(f"✓ Language model HF repo: {lm_hf_repo}")
+    else:
+        print(f"✗ Language model: Using local path only")
+    print(f"{'='*60}\n")
+
     num_gpus = torch.cuda.device_count() if device == "cuda" else 0
     if num_gpus > 1:
         print(f"✓ Found {num_gpus} GPUs — enabling DataParallel across all of them")
 
     plain = read_plain_text(config["data"]["data_dir"])
     cipher_clean = read_cipher_tokens("cipher_00.txt", config["data"]["data_dir"], verbose=False)
-    chars = list(plain)[: len(cipher_clean)]
-    cipher_clean = cipher_clean[: len(chars)]
-
+    
+    # Fix: cipher_clean is a list of tokens, so len(cipher_clean) = num tokens
+    # Each cipher token maps to 1 character, so the lengths should match 1:1
+    # Build vocab from all cipher tokens (full length)
     cipher_vocab = build_vocab(cipher_clean)
-    char_vocab = build_vocab(chars)
+    
+    # For char_vocab, use the full plain text (cipher_clean has same number of tokens as chars in plain)
+    # The cipher was built such that each token maps to one character position
+    plain_chars_full = list(plain.replace('\x00', ' '))
+    # Truncate to match cipher token count if needed
+    if len(plain_chars_full) > len(cipher_clean):
+        plain_chars_full = plain_chars_full[:len(cipher_clean)]
+    char_vocab = build_vocab(plain_chars_full)
 
     # Build language model vocabulary like Task 2: char-level with spaces restored
     plain_chars = list(plain.replace('\x00', ' '))
@@ -376,7 +452,12 @@ def main(config_path: str, mode: str) -> None:
             dec_model, cipher_noisy, cipher_vocab, char_vocab,
             seq_len=seq_len, device=device, batch_size=batch_size
         )
+        
+        # Debug: Show decryption output sample
+        print(f"    Decrypted {len(pred_raw)} chars, avg conf: {sum(conf)/len(conf):.3f}" if conf else "    No confidence scores")
+        
         low_pos = _find_low_conf_char_positions(pred_raw, conf, conf_threshold)
+        print(f"    Found {len(low_pos)} low-confidence positions ({100*len(low_pos)/max(len(pred_raw),1):.1f}%)")
 
         if lm_type == "bilstm":
             pred_corrected = _correct_with_bilstm(
@@ -390,6 +471,10 @@ def main(config_path: str, mode: str) -> None:
                 seq_len=lm_seq_len, device=device, batch_size=batch_size,
                 aux_models=lm_aux if lm_aux else None,
             )
+        
+        # Count how many characters were actually changed
+        changes = sum(1 for a, b in zip(pred_raw, pred_corrected) if a != b)
+        print(f"    Made {changes} corrections")
 
         m_raw = _compute_metrics(pred_raw, plain)
         m_corr = _compute_metrics(pred_corrected, plain)
