@@ -279,6 +279,105 @@ def _correct_with_ssm(
     return "".join(chars)
 
 
+@torch.no_grad()
+def _correct_words_with_bilstm(
+    text: str, char_conf: list[float], lm_model, lm_vocab,
+    seq_len: int, device: str, batch_size: int = 256,
+    aux_models: list | None = None, conf_threshold: float = 0.3,
+) -> str:
+    """Correct low-confidence words using word-level BiLSTM.
+    
+    Converts text to words, identifies words with low average character confidence,
+    and uses BiLSTM MLM to predict replacement words.
+    """
+    # Split text into words
+    words = text.split()
+    if not words:
+        return text
+    
+    # Map character positions to word indices
+    word_indices = []
+    char_idx = 0
+    for word_idx, word in enumerate(words):
+        for _ in word:
+            word_indices.append(word_idx)
+            char_idx += 1
+        # Space after word (except last)
+        if char_idx < len(char_conf):
+            word_indices.append(word_idx)
+            char_idx += 1
+    
+    # Calculate average confidence per word
+    word_confidences = []
+    for word_idx, word in enumerate(words):
+        # Get confidence for chars in this word
+        char_confs = [char_conf[i] for i, wi in enumerate(word_indices) if wi == word_idx and i < len(char_conf)]
+        avg_conf = sum(char_confs) / len(char_confs) if char_confs else 0
+        word_confidences.append(avg_conf)
+    
+    # Find low-confidence words
+    low_conf_words = [i for i, conf in enumerate(word_confidences) if conf < conf_threshold]
+    if not low_conf_words:
+        return text
+    
+    print(f"    [Word Correction] Found {len(low_conf_words)} low-confidence words out of {len(words)}")
+    
+    # Correction process
+    mask_id = lm_vocab.stoi.get(MASK, 0)
+    unk_id = lm_vocab.stoi.get("<unk>", 0)
+    
+    words_corrected = list(words)
+    total = len(low_conf_words)
+    
+    # Build replica list
+    replicas = [(lm_model, device)] + (aux_models or [])
+    n_replicas = len(replicas)
+    
+    for b_idx, b_start in enumerate(range(0, total, batch_size)):
+        curr_model, curr_device = replicas[b_idx % n_replicas]
+        batch = low_conf_words[b_start : b_start + batch_size]
+        
+        windows_list = []
+        local_pos_list = []
+        word_pos_list = []
+        
+        for word_pos in batch:
+            # Get window of words around target
+            left = max(0, word_pos - seq_len // 2)
+            right = min(len(words), left + seq_len)
+            left = max(0, right - seq_len)
+            
+            window_words = words_corrected[left:right]
+            # Convert words to IDs
+            x = [lm_vocab.stoi.get(w, unk_id) for w in window_words]
+            local_pos = word_pos - left
+            
+            if 0 <= local_pos < len(x):
+                x[local_pos] = mask_id  # Mask the target word
+                windows_list.append(x)
+                local_pos_list.append(local_pos)
+                word_pos_list.append(word_pos)
+        
+        if not windows_list:
+            continue
+        
+        # Pad and run through model
+        max_len = max(len(w) for w in windows_list)
+        padded = [w + [mask_id] * (max_len - len(w)) for w in windows_list]
+        
+        xt = torch.tensor(padded, dtype=torch.long, device=curr_device)
+        logits = curr_model(xt)
+        
+        # Update words with predictions
+        for i, (local_pos, word_pos) in enumerate(zip(local_pos_list, word_pos_list)):
+            pred_id = int(logits[i, local_pos].argmax().item())
+            pred_word = lm_vocab.itos[pred_id]
+            if not pred_word.startswith("<") and pred_word != words_corrected[word_pos]:
+                words_corrected[word_pos] = pred_word
+    
+    return " ".join(words_corrected)
+
+
 def _compute_metrics(pred: str, target: str) -> dict[str, float]:
     """Compute metrics with proper alignment between prediction and target."""
     if not pred or not target:
@@ -353,9 +452,11 @@ def main(config_path: str, mode: str) -> None:
         plain_chars_full = plain_chars_full[:len(cipher_clean)]
     char_vocab = build_vocab(plain_chars_full)
 
-    # Build language model vocabulary like Task 2: char-level with spaces restored
-    plain_chars = list(plain.replace('\x00', ' '))
-    lm_vocab = build_vocab(plain_chars, add_mask=True)
+    # Build language model vocabulary at WORD level (for word-level BiLSTM)
+    # Split plain text by spaces to get words
+    plain_words = plain.replace('\x00', ' ').split()
+    lm_vocab = build_vocab(plain_words, add_mask=True)
+    print(f"  [LM Vocab] Word-level vocabulary: {len(lm_vocab.itos)} words")
 
     dec_model = DecryptionModel(
         input_vocab_size=len(cipher_vocab.itos),
@@ -460,10 +561,12 @@ def main(config_path: str, mode: str) -> None:
         print(f"    Found {len(low_pos)} low-confidence positions ({100*len(low_pos)/max(len(pred_raw),1):.1f}%)")
 
         if lm_type == "bilstm":
-            pred_corrected = _correct_with_bilstm(
-                pred_raw, low_pos, lm_model, lm_vocab,
+            # Use word-level correction for word-level BiLSTM
+            pred_corrected = _correct_words_with_bilstm(
+                pred_raw, conf, lm_model, lm_vocab,
                 seq_len=lm_seq_len, device=device, batch_size=batch_size,
                 aux_models=lm_aux if lm_aux else None,
+                conf_threshold=conf_threshold,
             )
         else:
             pred_corrected = _correct_with_ssm(
