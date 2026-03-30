@@ -41,7 +41,7 @@ language_model:
   embedding_dim: 128
   hidden_size: 192
   dropout: 0.2
-  seq_len: 256
+  seq_len: 128
   checkpoint_path: outputs/logs/checkpoints/task2_bilstm.pt
   hf_filename: task2_bilstm.pt
   hf:

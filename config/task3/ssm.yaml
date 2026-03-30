@@ -41,7 +41,7 @@ language_model:
   embedding_dim: 256
   state_size: 512
   dropout: 0.2
-  seq_len: 256
+  seq_len: 128
   checkpoint_path: outputs/logs/checkpoints/task2_ssm.pt
   hf_filename: task2_ssm.pt
   hf:
